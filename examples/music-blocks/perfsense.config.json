@@ -1,0 +1,19 @@
+{
+  "pages": ["examples/music-blocks/pages/fast-project.html",
+            "examples/music-blocks/pages/slow-project.html"],
+  "runs": 11,
+  "thresholds": {
+    "playbackLatency": { "warning": 20, "fail": 50 },
+    "audioDrift":      { "warning": 15, "fail": 30 },
+    "stageUpdateTime": { "warning": 10, "fail": 25 },
+    "blockThroughput": { "warning": 10, "fail": 20 },
+    "projectLoadTime": { "warning": 15, "fail": 30 },
+    "TTFB":            { "warning": 10, "fail": 30 },
+    "FCP":             { "warning": 5,  "fail": 10 },
+    "LCP":             { "warning": 5,  "fail": 10 }
+  },
+  "metrics": ["ttfb", "fcp", "lcp",
+              "playbackLatency", "audioDrift",
+              "stageUpdateTime", "blockThroughput",
+              "projectLoadTime"]
+}

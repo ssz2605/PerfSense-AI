@@ -1,0 +1,31 @@
+{
+  "name": "@perfsense/cli",
+  "version": "0.5.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "perfsense": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@perfsense/core": "workspace:*",
+    "@perfsense/metrics-core": "workspace:*",
+    "@perfsense/metrics-musicblocks": "workspace:*",
+    "@perfsense/driver-playwright": "workspace:*",
+    "@perfsense/statistics": "workspace:*",
+    "@perfsense/evidence-trace": "workspace:*",
+    "@perfsense/evidence-network": "workspace:*",
+    "@perfsense/evidence-git-diff": "workspace:*",
+    "@perfsense/correlation-engine": "workspace:*",
+    "@perfsense/reporter-github": "workspace:*",
+    "@perfsense/ai-provider": "workspace:*",
+    "playwright": "^1.47.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}

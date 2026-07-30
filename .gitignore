@@ -1,0 +1,9 @@
+﻿node_modules/
+dist/
+.env
+*.trace
+results.json
+baseline.json
+current.json
+.vitest/
+coverage/

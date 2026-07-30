@@ -1,0 +1,26 @@
+{
+  "name": "@perfsense/github-action",
+  "version": "0.5.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0",
+    "@perfsense/cli": "workspace:*",
+    "@perfsense/reporter-github": "workspace:*",
+    "@perfsense/source-mapper": "workspace:*",
+    "@perfsense/git-blame": "workspace:*",
+    "@perfsense/ai-provider": "workspace:*",
+    "@perfsense/correlation-engine": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "vitest": "^1.6.0"
+  }
+}

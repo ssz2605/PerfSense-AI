@@ -1,0 +1,24 @@
+name: 'PerfSense AI'
+description: 'Benchmark and detect performance regressions'
+inputs:
+  api-key:
+    description: 'OpenAI/Anthropic API key (optional, enables AI analysis)'
+    required: false
+  ai-provider:
+    description: 'openai | anthropic | ollama'
+    default: 'openai'
+  ai-model:
+    description: 'Model name'
+    default: 'gpt-4o-mini'
+  fail-on-regression:
+    description: 'true | false'
+    default: 'false'
+  config:
+    description: 'Path to perfsense.config.json'
+    default: './perfsense.config.json'
+  baseline-ref:
+    description: 'Git ref to compare against (e.g., main, HEAD~1)'
+    default: 'HEAD~1'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

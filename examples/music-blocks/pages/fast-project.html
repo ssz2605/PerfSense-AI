@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Music Blocks — Fast Project</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #f0fdf4; }
+  canvas { border: 1px solid #ccc; display: block; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h1>Fast Project</h1>
+<div id="blocks"></div>
+<canvas id="stage" width="400" height="300"></canvas>
+<script>
+(function () {
+  var mb = {
+    _callbacks: {},
+
+    startPlayback: function (cb) {
+      setTimeout(cb, 2);
+    },
+
+    testAudioDrift: function (count, interval, cb) {
+      var results = [];
+      for (var i = 0; i < count; i++) {
+        results.push({
+          expected: i * interval,
+          actual: i * interval + Math.random() * 0.5
+        });
+      }
+      setTimeout(function () { cb(results); }, 5);
+    },
+
+    stage: {
+      childrenCount: 3,
+      update: function () {
+        var s = 0;
+        for (var i = 0; i < this.childrenCount; i++) {
+          for (var j = 0; j < 100; j++) { s += Math.sqrt(i * j + 1); }
+        }
+      }
+    },
+
+    blockQueue: {
+      executeBlock: function () {
+        var s = 0;
+        for (var i = 0; i < 100; i++) { s += Math.sqrt(i + 1); }
+        return s;
+      }
+    },
+
+    loadProject: function (data, cb) {
+      setTimeout(cb, 5);
+    }
+  };
+
+  window.__mb = mb;
+
+  // Render some blocks for visual interest
+  (function renderBlocks() {
+    var container = document.getElementById('blocks');
+    for (var i = 0; i < 4; i++) {
+      var div = document.createElement('div');
+      div.textContent = 'block ' + i;
+      div.style.cssText = 'display:inline-block;padding:6px 12px;margin:4px;background:#bbf7d0;border-radius:4px;';
+      container.appendChild(div);
+    }
+  })();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Music Blocks — Slow Project</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #fef2f2; }
+  canvas { border: 1px solid #ccc; display: block; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h1>Slow Project (50+ blocks)</h1>
+<div id="blocks"></div>
+<canvas id="stage" width="800" height="600"></canvas>
+<script>
+(function () {
+  var BLOCK_COUNT = 50;
+
+  var mb = {
+    _callbacks: {},
+
+    startPlayback: function (cb) {
+      setTimeout(cb, 30 + Math.random() * 20);
+    },
+
+    testAudioDrift: function (count, interval, cb) {
+      var results = [];
+      var accumulatedDrift = 0;
+      for (var i = 0; i < count; i++) {
+        var expected = i * interval;
+        var drift = Math.random() * 3 + 1;
+        accumulatedDrift += drift;
+        results.push({
+          expected: expected,
+          actual: expected + accumulatedDrift
+        });
+      }
+      setTimeout(function () { cb(results); }, 30);
+    },
+
+    stage: {
+      childrenCount: 50,
+      update: function () {
+        var s = 0;
+        for (var i = 0; i < this.childrenCount; i++) {
+          for (var j = 0; j < 1000; j++) { s += Math.sqrt(i * j + 1); }
+        }
+      }
+    },
+
+    blockQueue: {
+      executeBlock: function () {
+        var s = 0;
+        for (var i = 0; i < 1000; i++) { s += Math.sqrt(i); }
+        return s;
+      }
+    },
+
+    loadProject: function (data, cb) {
+      setTimeout(function () {
+        var parsed;
+        for (var i = 0; i < 50; i++) {
+          parsed = JSON.parse(data);
+        }
+        if (cb) cb();
+      }, 100 + Math.random() * 50);
+    }
+  };
+
+  window.__mb = mb;
+
+  // Render 50+ blocks
+  (function renderBlocks() {
+    var container = document.getElementById('blocks');
+    var colors = ['#fecaca','#fed7aa','#fde68a','#d9f99d','#bbf7d0','#a7f3d0','#67e8f9','#c4b5fd','#fbcfe8'];
+    for (var i = 0; i < BLOCK_COUNT; i++) {
+      var div = document.createElement('div');
+      div.textContent = 'block ' + i;
+      div.style.cssText = 'display:inline-block;padding:6px 12px;margin:4px;background:' +
+        colors[i % colors.length] + ';border-radius:4px;';
+      container.appendChild(div);
+    }
+  })();
+})();
+</script>
+</body>
+</html>
