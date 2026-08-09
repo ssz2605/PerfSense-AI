@@ -11,9 +11,29 @@ export function isUrl(value: string): boolean {
 
 export function pageNameFromUrl(url: string): string {
   try {
-    return new URL(url).pathname.split('/').filter(Boolean).pop() || 'index';
+    const u = new URL(url);
+    const proj = u.searchParams.get('perfsenseProject');
+    if (proj) {
+      const seg = proj.split('/').filter(Boolean).pop();
+      if (seg) return seg;
+    }
+    return u.pathname.split('/').filter(Boolean).pop() || 'index';
   } catch {
     return url;
+  }
+}
+
+const RUN_TIMEOUT_MS = 120000;
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`run exceeded ${ms}ms timeout, skipping`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -60,41 +80,51 @@ export class BenchmarkDriver {
         console.log(`\nBenchmarking ${pageName} (${runs} runs) ...`);
 
         for (let i = 0; i < runs; i++) {
-          const context = await browser.newContext();
-          const page: Page = await context.newPage();
+          try {
+            await withTimeout(
+              (async () => {
+                const context = await browser.newContext();
+                const page: Page = await context.newPage();
 
-          for (const plugin of plugins) {
-            await plugin.setupPage(page);
+                for (const plugin of plugins) {
+                  await plugin.setupPage(page);
+                }
+
+                await page.goto(url, { waitUntil: 'load' });
+
+                for (const plugin of plugins) {
+                  if (plugin.setupPostNav) {
+                    await plugin.setupPostNav(page);
+                  }
+                }
+
+                await page.waitForTimeout(settleMs);
+
+                const runMetrics: Record<string, number | null> = {};
+
+                for (const plugin of plugins) {
+                  const metricValue = await plugin.extractMetric(page);
+                  runMetrics[plugin.name] = metricValue.value;
+                }
+
+                await context.close();
+                return runMetrics;
+              })(),
+              RUN_TIMEOUT_MS
+            ).then((runMetrics) => {
+              pageRuns.push({ run: i + 1, metrics: runMetrics });
+
+              const line = `  run ${i + 1}/${runs} -> ` +
+                plugins.map((p) => {
+                  const v = runMetrics[p.name];
+                  const unit = p.meta.unit === 'blocks/s' ? 'blk/s' : p.meta.unit;
+                  return `${p.name}: ${v !== null ? v.toFixed(1) : 'null'}${unit}`;
+                }).join(', ');
+              console.log(line);
+            });
+          } catch (e) {
+            console.warn(`  run ${i + 1}/${runs} skipped: ${(e as Error).message}`);
           }
-
-          await page.goto(url, { waitUntil: 'load' });
-
-          for (const plugin of plugins) {
-            if (plugin.setupPostNav) {
-              await plugin.setupPostNav(page);
-            }
-          }
-
-          await page.waitForTimeout(settleMs);
-
-          const runMetrics: Record<string, number | null> = {};
-
-          for (const plugin of plugins) {
-            const metricValue = await plugin.extractMetric(page);
-            runMetrics[plugin.name] = metricValue.value;
-          }
-
-          await context.close();
-
-          pageRuns.push({ run: i + 1, metrics: runMetrics });
-
-          const line = `  run ${i + 1}/${runs} -> ` +
-            plugins.map((p) => {
-              const v = runMetrics[p.name];
-              const unit = p.meta.unit === 'blocks/s' ? 'blk/s' : p.meta.unit;
-              return `${p.name}: ${v !== null ? v.toFixed(1) : 'null'}${unit}`;
-            }).join(', ');
-          console.log(line);
         }
 
         results.push({ page: pageName, runs: pageRuns });
