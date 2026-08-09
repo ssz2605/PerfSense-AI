@@ -5,6 +5,18 @@ import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import type { MetricPlugin, BenchmarkConfig, BenchmarkRun, PageResult } from '@perfsense/core';
 
+export function isUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+export function pageNameFromUrl(url: string): string {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean).pop() || 'index';
+  } catch {
+    return url;
+  }
+}
+
 export class BenchmarkDriver {
   private config: BenchmarkConfig;
 
@@ -35,14 +47,14 @@ export class BenchmarkDriver {
     const results: PageResult[] = [];
 
     const pagesDir = process.cwd();
-
-    const server = await this.startServer(pagesDir);
+    const hasLocalPages = pages.some((p) => !isUrl(p));
+    const server = hasLocalPages ? await this.startServer(pagesDir) : null;
     const browser: Browser = await chromium.launch();
 
     try {
-      for (const pagePath of pages) {
-        const pageName = path.basename(pagePath);
-        const url = `http://localhost:${port}/${pageName}`;
+      for (const pageInput of pages) {
+        const pageName = isUrl(pageInput) ? pageNameFromUrl(pageInput) : path.basename(pageInput);
+        const url = isUrl(pageInput) ? pageInput : `http://localhost:${port}/${pageName}`;
         const pageRuns: BenchmarkRun[] = [];
 
         console.log(`\nBenchmarking ${pageName} (${runs} runs) ...`);
@@ -89,7 +101,9 @@ export class BenchmarkDriver {
       }
     } finally {
       await browser.close();
-      server.close();
+      if (server) {
+        server.close();
+      }
     }
 
     return results;

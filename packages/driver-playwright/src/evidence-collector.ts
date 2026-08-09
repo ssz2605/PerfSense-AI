@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import type { Browser, Page, BrowserContext, Response } from 'playwright';
 import type { MetricPlugin, Evidence, EvidenceHighlight } from '@perfsense/core';
 import { collectGitDiffEvidence } from '@perfsense/evidence-git-diff';
+import { isUrl, pageNameFromUrl } from './driver';
 import * as crypto from 'crypto';
 import http from 'http';
 import fs from 'fs';
@@ -42,22 +43,27 @@ export class EvidenceCollector {
     pagesDir: string,
     pagePaths: string[],
   ): Promise<Record<string, Evidence[]>> {
-    const server = http.createServer((req, res) => {
-      const filePath = path.join(pagesDir, req.url === '/' ? 'index.html' : req.url ?? '');
-      fs.readFile(filePath, (err, data) => {
-        if (err) {
-          res.writeHead(404);
-          res.end('Not found');
-          return;
-        }
-        res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end(data);
-      });
-    });
+    const hasLocalPages = pagePaths.some((p) => !isUrl(p));
+    const server = hasLocalPages
+      ? http.createServer((req, res) => {
+          const filePath = path.join(pagesDir, req.url === '/' ? 'index.html' : req.url ?? '');
+          fs.readFile(filePath, (err, data) => {
+            if (err) {
+              res.writeHead(404);
+              res.end('Not found');
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'text/html' });
+            res.end(data);
+          });
+        })
+      : null;
 
-    await new Promise<void>((resolve) => {
-      server.listen(this.port, () => resolve());
-    });
+    if (server) {
+      await new Promise<void>((resolve) => {
+        server.listen(this.port, () => resolve());
+      });
+    }
 
     const browser: Browser = await chromium.launch({ headless: true });
 
@@ -65,7 +71,8 @@ export class EvidenceCollector {
       const result: Record<string, Evidence[]> = {};
 
       for (const pagePath of pagePaths) {
-        const pageName = path.basename(pagePath);
+        const isUrlPage = isUrl(pagePath);
+        const pageName = isUrlPage ? pageNameFromUrl(pagePath) : path.basename(pagePath);
         console.error(`  [evidence] Re-running ${pageName} with tracing ...`);
 
         const context: BrowserContext = await browser.newContext();
@@ -106,7 +113,7 @@ export class EvidenceCollector {
           await plugin.setupPage(page);
         }
 
-        await page.goto(`http://localhost:${this.port}/${pageName}`, { waitUntil: 'load' });
+        await page.goto(isUrlPage ? pagePath : `http://localhost:${this.port}/${pageName}`, { waitUntil: 'load' });
 
         for (const plugin of plugins) {
           if (plugin.setupPostNav) {
@@ -237,7 +244,9 @@ export class EvidenceCollector {
       return result;
     } finally {
       await browser.close();
-      server.close();
+      if (server) {
+        server.close();
+      }
     }
   }
 }

@@ -3,7 +3,7 @@ import fs from 'fs';
 import type { PageResult, BaselineData, BaselinePage, ThresholdLevel, PerfSenseConfig, MetricCheckResult, CheckStatus, Evidence, EvidenceHighlight } from '@perfsense/core';
 import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
-import { EvidenceCollector } from '@perfsense/driver-playwright';
+import { EvidenceCollector, isUrl, pageNameFromUrl } from '@perfsense/driver-playwright';
 import { LCP, FCP, TTFB } from '@perfsense/metrics-core';
 import { PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime } from '@perfsense/metrics-musicblocks';
 import type { MetricPlugin } from '@perfsense/core';
@@ -155,12 +155,13 @@ async function collectEvidence(
 
   const configDir = process.cwd();
 
-  const resolvedPagePaths = configPages.map((p: string) => path.resolve(configDir, p));
-  const pagesDir = resolvedPagePaths.length > 0 ? path.dirname(resolvedPagePaths[0]) : configDir;
-  const relativePages = resolvedPagePaths.map((p: string) => path.relative(pagesDir, p));
+  const resolvedPagePaths = configPages.map((p: string) => (isUrl(p) ? p : path.resolve(configDir, p)));
+  const localPages = resolvedPagePaths.filter((p: string) => !isUrl(p));
+  const pagesDir = localPages.length > 0 ? path.dirname(localPages[0]) : configDir;
+  const relativePages = resolvedPagePaths.map((p: string) => (isUrl(p) ? p : path.relative(pagesDir, p)));
 
   const pagesToEvince = relativePages.filter((p: string) => {
-    const basename = path.basename(p);
+    const basename = isUrl(p) ? pageNameFromUrl(p) : path.basename(p);
     return regressedPages.has(basename);
   });
 

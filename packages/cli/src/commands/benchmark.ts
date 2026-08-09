@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs';
-import { BenchmarkDriver } from '@perfsense/driver-playwright';
+import { BenchmarkDriver, isUrl } from '@perfsense/driver-playwright';
 import { LCP, FCP, TTFB } from '@perfsense/metrics-core';
 import { PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime } from '@perfsense/metrics-musicblocks';
 import { median } from '@perfsense/statistics';
@@ -84,11 +84,12 @@ function parseArgs(argv: string[]): Args {
 export async function run(argv: string[]): Promise<void> {
   const args = parseArgs(argv);
 
-  const resolvedPages = args.pages.map((p) => path.resolve(p));
+  const resolvedPages = args.pages.map((p) => (isUrl(p) ? p : path.resolve(p)));
 
-  const pagesDir = path.dirname(resolvedPages[0]);
+  const localPages = resolvedPages.filter((p) => !isUrl(p));
+  const pagesDir = localPages.length > 0 ? path.dirname(localPages[0]) : process.cwd();
 
-  const relativePages = resolvedPages.map((p) => path.relative(pagesDir, p));
+  const relativePages = resolvedPages.map((p) => (isUrl(p) ? p : path.relative(pagesDir, p)));
 
   const driver = new BenchmarkDriver({
     pages: relativePages,
