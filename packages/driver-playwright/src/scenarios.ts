@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page } from "playwright";
 
 /**
  * Per-page interaction scenarios that turn a real Music Blocks page into a
@@ -13,10 +13,10 @@ import type { Page } from 'playwright';
  */
 
 export const Scenario = {
-  Bootstrap: 'bootstrap',
-  OpenProject: 'openProject',
-  PlayToCompletion: 'playToCompletion',
-  SaveExport: 'saveExport'
+  Bootstrap: "bootstrap",
+  OpenProject: "openProject",
+  PlayToCompletion: "playToCompletion",
+  SaveExport: "saveExport",
 } as const;
 
 export type ScenarioName = (typeof Scenario)[keyof typeof Scenario];
@@ -31,7 +31,7 @@ export const SCENARIOS: readonly ScenarioName[] = [
   Scenario.Bootstrap,
   Scenario.OpenProject,
   Scenario.PlayToCompletion,
-  Scenario.SaveExport
+  Scenario.SaveExport,
 ];
 
 const bootstrapSnippet = `
@@ -39,10 +39,20 @@ const bootstrapSnippet = `
   const ps = (window).__perfsense = (window).__perfsense || {};
   const timeoutMs = __opt.timeoutMs || 120000;
   const startMs = Date.now();
-  // Wait for the app's bootstrap marks to land.
+  // Wait for the app's bootstrap marks to actually land. window.__mbPerf exists
+  // from the first line of the loader, so its mere presence is NOT a ready
+  // signal — and neither is the first loader-stage measure, which lands several
+  // seconds before the activity-init measures this metric reads. Wait until one
+  // of the alias-target keys below is numeric, so the pick below finds a value
+  // on the real app (bootstrapTotal <- loader_to_activity_init_complete).
+  const bootKeys = ['bootstrapTotal', 'bootTime', 'loader.total_bootstrap',
+    'loader_to_activity_init_complete', 'bootstrapStart', 'bootstrapEnd'];
+  const initKeys = ['initTotal', 'activity.init_total'];
   for (;;) {
-    const hasMarks = !!(ps.bootstrapTotal !== undefined && ps.initTotal !== undefined) || !!(window).__mbPerf;
-    if (hasMarks) break;
+    const m = (window).__mbPerf && (window).__mbPerf.measures ? (window).__mbPerf.measures : {};
+    const bootReady = bootKeys.some((k) => typeof m[k] === 'number');
+    const initReady = initKeys.some((k) => typeof m[k] === 'number');
+    if (bootReady && initReady) break;
     if (Date.now() - startMs > timeoutMs) break;
     await new Promise((r) => setTimeout(r, 100));
   }
@@ -58,7 +68,7 @@ const bootstrapSnippet = `
   };
   if (typeof ps.bootstrapTotal !== 'number') {
     const s = pick(['bootstrapStart']); const e = pick(['bootstrapEnd']);
-    ps.bootstrapTotal = (s !== null && e !== null && e > s) ? (e - s) : pick(['bootstrapTotal', 'bootTime', 'loader_to_activity_init_complete']);
+    ps.bootstrapTotal = (s !== null && e !== null && e > s) ? (e - s) : pick(['bootstrapTotal', 'bootTime', 'loader_to_activity_init_complete', 'loader.total_bootstrap']);
   }
   if (typeof ps.initTotal !== 'number') {
     ps.initTotal = pick(['initTotal', 'setupDependenciesTotal', 'initTime', 'activity.init_total']);
@@ -82,20 +92,30 @@ const openProjectSnippet = `
   const timeoutMs = __opt.timeoutMs || 120000;
   const startMs = Date.now();
   const openStart = performance.now();
-  const mb = (window).__mb || {};
-  const bridgeMark = (mb.perfMarks && typeof mb.perfMarks.openStart === 'number') ? mb.perfMarks.openStart : null;
-  // "Render ready" means the block table stopped growing: two consecutive
-  // samples taken ~400ms apart equal each other (and are nonzero). This stays
-  // robust to chunked project loading, where node count climbs while the
-  // project is decoded and rendered.
-  const blockCount = () => (document.querySelectorAll('#blockTable .block, .blockTable .block, #blocks .block')).length;
+  const bridgeMark = (() => {
+    const mb = (window).__mb || {};
+    return (mb.perfMarks && typeof mb.perfMarks.openStart === 'number') ? mb.perfMarks.openStart : null;
+  })();
+  // "Render ready" means the workspace stopped growing: two consecutive
+  // samples taken ~400ms apart equal each other (and differ from the boot-time
+  // baseline, which is non-empty by default in the real app). On the real app
+  // blocks render to the canvas, so count blocks.blockList rather than DOM
+  // ".block" nodes; mocks without that surface fall back to the DOM count.
+  // window.__mb is read live every sample: it may not exist yet at scenario
+  // start on cold pages.
+  const blockCount = () => {
+    const mb = (window).__mb || {};
+    if (mb.blocks && Array.isArray(mb.blocks.blockList)) return mb.blocks.blockList.length;
+    return (document.querySelectorAll('#blockTable .block, .blockTable .block, #blocks .block')).length;
+  };
+  const initialLen = blockCount();
   const waitStable = async () => {
     let prev = -1;
     let rounds = 0;
     for (;;) {
       if (Date.now() - startMs > timeoutMs) return false;
       const cur = blockCount();
-      if (cur === prev && cur > 0) {
+      if (cur === prev && cur > 0 && cur !== initialLen) {
         rounds += 1;
         if (rounds >= 2) return true;
       } else {
@@ -177,12 +197,14 @@ const playToCompletionSnippet = `
     const transport = mb.logo.synth.transport;
     const origSchedule = transport.schedule.bind(transport);
     ps.transportLatched = true;
-    ps.transport = { latencies: [], scheduledTx: [], firedAudio: [], onset: null, count: 0 };
+    ps.transport = { latencies: [], scheduledTx: [], firedAudio: [], onset: null, count: 0, pending: 0 };
     transport.schedule = function (cb, time) {
       const scheduleWall = performance.now();
+      const t = ps.transport;
+      t.pending = t.pending + 1;
       return origSchedule(function (audioContextTime) {
         const firedWall = performance.now();
-        const t = ps.transport;
+        t.pending = Math.max(0, t.pending - 1);
         t.latencies.push(firedWall - scheduleWall);
         t.scheduledTx.push(typeof time === 'number' ? time : null);
         t.firedAudio.push(typeof audioContextTime === 'number' ? audioContextTime : null);
@@ -191,9 +213,18 @@ const playToCompletionSnippet = `
         if (typeof cb === 'function') cb(audioContextTime);
       }, time);
     };
+    if (typeof transport.cancel === 'function') {
+      const origCancel = transport.cancel.bind(transport);
+      transport.cancel = function () {
+        ps.transport.pending = 0;
+        return origCancel.apply(this, arguments);
+      };
+    }
   }
 
   // --- install execution collector (idempotent) ---
+  // The modern engine executes through runFromBlockNow, not deprecated queue
+  // pop/shift, so blocksExecuted counts that entry point and maxDepth its nesting.
   if (!ps.execLatched && mb.logo) {
     ps.execLatched = true;
     ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0 };
@@ -203,37 +234,19 @@ const playToCompletionSnippet = `
       const exec = ps.exec;
       exec.depth = exec.depth + 1;
       if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
+      exec.blocksExecuted = exec.blocksExecuted + 1;
       try { return origRun.apply(logo, arguments); } finally { exec.depth = exec.depth - 1; }
     };
-    const wrapQueue = (q) => {
-      if (!q || q.__perfsenseWrapped) return;
-      q.__perfsenseWrapped = true;
-      const origPop = q.pop; const origShift = q.shift;
-      if (typeof origPop === 'function') {
-        q.pop = function () { ps.exec.blocksExecuted = ps.exec.blocksExecuted + 1; return origPop.apply(this, arguments); };
-      }
-      if (typeof origShift === 'function') {
-        q.shift = function () { ps.exec.blocksExecuted = ps.exec.blocksExecuted + 1; return origShift.apply(this, arguments); };
-      }
-    };
-    const turtleList = () => Array.isArray(mb.turtles) ? mb.turtles :
-      (mb.turtles && Array.isArray(mb.turtles.turtles)) ? mb.turtles.turtles : [];
-    const wrapTurtles = () => {
-      const list = turtleList();
-      for (let i = 0; i < list.length; i++) {
-        if (list[i] && Array.isArray(list[i].queue)) wrapQueue(list[i].queue);
-      }
-    };
-    wrapTurtles();
-    if (mb.turtles && typeof mb.turtles.addTurtle === 'function') {
-      const origAdd = mb.turtles.addTurtle.bind(mb.turtles);
-      mb.turtles.addTurtle = function () { const t = origAdd.apply(this, arguments); wrapTurtles(); return t; };
-    }
   }
 
   const isRunning = () => {
-    if (mb.runner && typeof mb.runner.isRunning === 'function') return mb.runner.isRunning();
-    if (mb.logo && typeof mb.logo.isRunning === 'function') return mb.logo.isRunning();
+    if (mb.runner && typeof mb.runner.isRunning === 'function' && mb.runner.isRunning()) return true;
+    if (mb.turtles && typeof mb.turtles.running === 'function' && mb.turtles.running()) return true;
+    // Scheduled-but-unfired transport events mean playback is still pending:
+    // the flat block-stepping loop ends long before the last scheduled note
+    // fires. Without this, waitDone returns after the sync segment only.
+    if (ps.transport && ps.transport.pending > 0) return true;
+    if (mb.logo && typeof mb.logo.isRunning === 'function' && mb.logo.isRunning()) return true;
     const list = Array.isArray(mb.turtles) ? mb.turtles :
       (mb.turtles && Array.isArray(mb.turtles.turtles)) ? mb.turtles.turtles : [];
     for (let i = 0; i < list.length; i++) {
@@ -250,10 +263,36 @@ const playToCompletionSnippet = `
     if (mb.logo && typeof mb.logo.run === 'function') { mb.logo.run(); return; }
   };
 
+  // Stop playback via the app's own path (doStopTurtles also cancels scheduled
+  // transport events). Needed between runs: a play click is a no-op while the
+  // engine's _alreadyRunning guard is set by the warm-up run.
+  const stopRun = async () => {
+    if (!isRunning()) return;
+    const logo = mb.logo;
+    if (logo && typeof logo.doStopTurtles === 'function') {
+      logo.doStopTurtles();
+    } else if (mb.runner && typeof mb.runner.stop === 'function') {
+      mb.runner.stop();
+    }
+    const t0 = Date.now();
+    while (isRunning() && Date.now() - t0 < 5000) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  };
+
   const waitDone = async (hardTimeoutMs) => {
     const t0 = Date.now();
+    const graceMs = 4000;
+    let sawRunning = false;
     for (;;) {
-      if (!isRunning()) break;
+      const runningNow = isRunning();
+      if (runningNow) sawRunning = true;
+      // Done only after the run has actually started once: the app begins
+      // playback asynchronously after the click, so an immediate false must not
+      // cut the window short. A run that never starts (broken page) still
+      // terminates after the grace period.
+      if (sawRunning && !runningNow) break;
+      if (!sawRunning && Date.now() - t0 > graceMs) break;
       if (Date.now() - t0 > hardTimeoutMs) break;
       await new Promise((r) => setTimeout(r, 150));
     }
@@ -281,7 +320,19 @@ const playToCompletionSnippet = `
     await waitDone(timeoutMs);
     const memAfterFirst = mem();
 
+    // Stop cleanly so the measured run starts fresh (the app ignores play
+    // while _alreadyRunning). Also resets transport counters so the latency
+    // metrics describe the measured run only.
+    await stopRun();
     if (ps.exec) { ps.exec.blocksExecuted = 0; ps.exec.maxDepth = 0; }
+    if (ps.transport) {
+      ps.transport.latencies = [];
+      ps.transport.scheduledTx = [];
+      ps.transport.firedAudio = [];
+      ps.transport.count = 0;
+      ps.transport.onset = null;
+      ps.transport.pending = 0;
+    }
 
     const runStart = performance.now();
     await startRun();
@@ -312,18 +363,22 @@ const SCENARIO_SNIPPETS: Record<ScenarioName, string> = {
   [Scenario.Bootstrap]: bootstrapSnippet,
   [Scenario.OpenProject]: openProjectSnippet,
   [Scenario.PlayToCompletion]: playToCompletionSnippet,
-  [Scenario.SaveExport]: saveExportSnippet
+  [Scenario.SaveExport]: saveExportSnippet,
 };
 
-async function callWithArg(page: Page, snippet: string, arg: unknown): Promise<unknown> {
-  const fn = new Function('__arg', 'return (' + snippet + ')(__arg);');
+async function callWithArg(
+  page: Page,
+  snippet: string,
+  arg: unknown,
+): Promise<unknown> {
+  const fn = new Function("__arg", "return (" + snippet + ")(__arg);");
   return page.evaluate(fn as never, arg as never);
 }
 
 export async function runScenario(
   name: ScenarioName,
   page: Page,
-  options: ScenarioOptions = {}
+  options: ScenarioOptions = {},
 ): Promise<unknown> {
   const snippet = SCENARIO_SNIPPETS[name];
   if (!snippet) return null;

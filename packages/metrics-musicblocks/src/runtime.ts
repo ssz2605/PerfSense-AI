@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { Page } from "playwright";
 
 /**
  * Page-side instrumentation for the real Music Blocks app.
@@ -48,7 +48,8 @@ const TRANSPORT_COLLECTOR_SNIPPET = `
   })();
 `;
 
-/** Tracks runFromBlockNow nesting (max logical depth) and queue drains. */
+/** Counts block executions via runFromBlockNow (the engine's real per-block
+ * path — queue pop/shift is deprecated in the modern app) and tracks nesting. */
 const EXECUTION_COLLECTOR_SNIPPET = `
   (function () {
     const ps = (window).__perfsense = (window).__perfsense || {};
@@ -57,61 +58,22 @@ const EXECUTION_COLLECTOR_SNIPPET = `
     if (!mb || !mb.logo) return;
     ps.execLatched = true;
     ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0 };
-    const hookRunFromBlockNow = () => {
-      try {
-        const logo = mb.logo;
-        const origRun = logo.runFromBlockNow.bind(logo);
-        logo.runFromBlockNow = function (l, turtle, blk, isflow, receivedArg, queueStart) {
-          const exec = ps.exec;
-          exec.depth = exec.depth + 1;
-          if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
-          try {
-            return origRun(l, turtle, blk, isflow, receivedArg, queueStart);
-          } finally {
-            exec.depth = exec.depth - 1;
-          }
-        };
-      } catch (e) {
-        void e;
-      }
-    };
-    hookRunFromBlockNow();
-    // Count queue drains by wrapping each turtle's queue pop/shift once.
-    const wrapQueue = (q) => {
-      if (!q || q.__perfsenseWrapped) return;
-      q.__perfsenseWrapped = true;
-      const origPop = q.pop;
-      const origShift = q.shift;
-      if (typeof origPop === 'function') {
-        q.pop = function () {
-          ps.exec.blocksExecuted = ps.exec.blocksExecuted + 1;
-          return origPop.apply(this, arguments);
-        };
-      }
-      if (typeof origShift === 'function') {
-        q.shift = function () {
-          ps.exec.blocksExecuted = ps.exec.blocksExecuted + 1;
-          return origShift.apply(this, arguments);
-        };
-      }
-    };
-    const wrapTurtles = () => {
-      if (!mb.turtles) return;
-      const list =
-        Array.isArray(mb.turtles) ? mb.turtles :
-        Array.isArray(mb.turtles.turtles) ? mb.turtles.turtles : [];
-      for (let i = 0; i < list.length; i++) {
-        if (list[i] && Array.isArray(list[i].queue)) wrapQueue(list[i].queue);
-      }
-    };
-    wrapTurtles();
-    if (mb.turtles && typeof mb.turtles.addTurtle === 'function') {
-      const origAdd = mb.turtles.addTurtle.bind(mb.turtles);
-      mb.turtles.addTurtle = function () {
-        const t = origAdd.apply(this, arguments);
-        wrapTurtles();
-        return t;
+    try {
+      const logo = mb.logo;
+      const origRun = logo.runFromBlockNow.bind(logo);
+      logo.runFromBlockNow = function (l, turtle, blk, isflow, receivedArg, queueStart) {
+        const exec = ps.exec;
+        exec.depth = exec.depth + 1;
+        if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
+        exec.blocksExecuted = exec.blocksExecuted + 1;
+        try {
+          return origRun(l, turtle, blk, isflow, receivedArg, queueStart);
+        } finally {
+          exec.depth = exec.depth - 1;
+        }
       };
+    } catch (e) {
+      void e;
     }
   })();
 `;
@@ -126,6 +88,8 @@ function runEndPollSnippet(timeoutMs: number, settleMs: number): string {
     const timeoutMs = ${timeoutMs};
     const settleMs = ${settleMs};
     const isRunning = () => {
+      const psRun = (window).__perfsense ? (window).__perfsense : null;
+      if (psRun && psRun.transport && psRun.transport.pending > 0) return true;
       if (mb && mb.runner && typeof mb.runner.isRunning === 'function') {
         return mb.runner.isRunning();
       }
@@ -170,11 +134,16 @@ export async function installExecutionCollector(page: Page): Promise<void> {
   await page.evaluate(EXECUTION_COLLECTOR_SNIPPET);
 }
 
-export async function waitForRunEnd(page: Page, timeoutMs = 120000): Promise<void> {
+export async function waitForRunEnd(
+  page: Page,
+  timeoutMs = 120000,
+): Promise<void> {
   await page.evaluate(runEndPollSnippet(timeoutMs, 1200));
 }
 
-export async function readPerfsense(page: Page): Promise<Record<string, number | null>> {
+export async function readPerfsense(
+  page: Page,
+): Promise<Record<string, number | null>> {
   return page.evaluate(() => {
     const ps = (window as any).__perfsense || {};
     const t = ps.transport || null;
@@ -194,7 +163,7 @@ export async function readPerfsense(page: Page): Promise<Record<string, number |
       initTotal: null,
       heapAfterBoot: null,
       memoryDelta: null,
-      retainedHeap: null
+      retainedHeap: null,
     };
     const mean = (arr: number[]) =>
       arr.length === 0 ? null : arr.reduce((s, v) => s + v, 0) / arr.length;
@@ -204,8 +173,14 @@ export async function readPerfsense(page: Page): Promise<Record<string, number |
         t.latencies.length === 0 ? null : Math.max(...t.latencies);
       let drift = 0;
       for (let i = 1; i < t.scheduledTx.length; i++) {
-        const ds = t.scheduledTx[i - 1] !== null && t.scheduledTx[i] !== null ? t.scheduledTx[i] - t.scheduledTx[i - 1] : null;
-        const da = t.firedAudio[i - 1] !== null && t.firedAudio[i] !== null ? t.firedAudio[i] - t.firedAudio[i - 1] : null;
+        const ds =
+          t.scheduledTx[i - 1] !== null && t.scheduledTx[i] !== null
+            ? t.scheduledTx[i] - t.scheduledTx[i - 1]
+            : null;
+        const da =
+          t.firedAudio[i - 1] !== null && t.firedAudio[i] !== null
+            ? t.firedAudio[i] - t.firedAudio[i - 1]
+            : null;
         if (ds !== null && da !== null) {
           drift += Math.abs(da * 1000 - ds * 1000);
         }
@@ -217,16 +192,22 @@ export async function readPerfsense(page: Page): Promise<Record<string, number |
       out.blocksExecuted = ps.exec.blocksExecuted;
       out.maxDepth = ps.exec.maxDepth === 0 ? null : ps.exec.maxDepth;
     }
-    if (typeof ps.executionTime === 'number') out.executionTime = ps.executionTime;
-    if (typeof ps.maxQueueDepth === 'number') out.maxQueueDepth = ps.maxQueueDepth;
-    if (typeof ps.projectLoadTime === 'number') out.projectLoadTime = ps.projectLoadTime;
-    if (typeof ps.saveTime === 'number') out.saveTime = ps.saveTime;
-    if (typeof ps.exportMIDITime === 'number') out.exportMIDITime = ps.exportMIDITime;
-    if (typeof ps.bootstrapTotal === 'number') out.bootstrapTotal = ps.bootstrapTotal;
-    if (typeof ps.initTotal === 'number') out.initTotal = ps.initTotal;
-    if (typeof ps.heapAfterBoot === 'number') out.heapAfterBoot = ps.heapAfterBoot;
-    if (typeof ps.memoryDelta === 'number') out.memoryDelta = ps.memoryDelta;
-    if (typeof ps.retainedHeap === 'number') out.retainedHeap = ps.retainedHeap;
+    if (typeof ps.executionTime === "number")
+      out.executionTime = ps.executionTime;
+    if (typeof ps.maxQueueDepth === "number")
+      out.maxQueueDepth = ps.maxQueueDepth;
+    if (typeof ps.projectLoadTime === "number")
+      out.projectLoadTime = ps.projectLoadTime;
+    if (typeof ps.saveTime === "number") out.saveTime = ps.saveTime;
+    if (typeof ps.exportMIDITime === "number")
+      out.exportMIDITime = ps.exportMIDITime;
+    if (typeof ps.bootstrapTotal === "number")
+      out.bootstrapTotal = ps.bootstrapTotal;
+    if (typeof ps.initTotal === "number") out.initTotal = ps.initTotal;
+    if (typeof ps.heapAfterBoot === "number")
+      out.heapAfterBoot = ps.heapAfterBoot;
+    if (typeof ps.memoryDelta === "number") out.memoryDelta = ps.memoryDelta;
+    if (typeof ps.retainedHeap === "number") out.retainedHeap = ps.retainedHeap;
     return out;
   });
 }

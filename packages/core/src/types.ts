@@ -1,7 +1,7 @@
 export interface MetricMeta {
   unit: string;
   lowerIsBetter: boolean;
-  type: 'duration' | 'score' | 'count';
+  type: "duration" | "score" | "count";
 }
 
 export interface MetricValue {
@@ -27,14 +27,15 @@ export interface BenchmarkConfig {
   port: number;
   /** Optional interaction scenario applied to every page (keyed by page name when `fixtures` is set). */
   scenario?: string;
-  /**
-   * Ordered interaction phases per page name. Each phase runs in sequence inside
+  /** Ordered interaction phases per page name. Each phase runs in sequence inside
    * one page so composites like "openProject then playToCompletion" work on a
    * single measured run. Takes precedence over `scenario` for pages that list one.
    */
   scenarios?: Record<string, string[]>;
   /** Fixture file name per page name, used by the openProject scenario. */
   fixtures?: Record<string, string>;
+  /** Per-run wall-clock budget in ms (default 120000). */
+  runTimeoutMs?: number;
 }
 
 export interface BaselineMetricStats {
@@ -65,7 +66,7 @@ export interface PerfSenseConfig {
   thresholds: Record<string, ThresholdLevel>;
 }
 
-export type CheckStatus = 'PASS' | 'WARNING' | 'REGRESSION';
+export type CheckStatus = "PASS" | "WARNING" | "REGRESSION";
 
 export interface MetricCheckResult {
   page: string;
@@ -80,12 +81,12 @@ export interface MetricCheckResult {
 export interface EvidenceHighlight {
   label: string;
   value: string;
-  severity: 'info' | 'warning' | 'critical';
+  severity: "info" | "warning" | "critical";
 }
 
 export interface Evidence {
   id: string;
-  type: 'trace' | 'network' | 'git-diff';
+  type: "trace" | "network" | "git-diff";
   metricName: string;
   timestamp: number;
   confidence: number;
