@@ -4,8 +4,8 @@ import type { PageResult, BaselineData, BaselinePage, ThresholdLevel, PerfSenseC
 import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
 import { EvidenceCollector, isUrl, pageNameFromUrl } from '@perfsense/driver-playwright';
-import { LCP, FCP, TTFB } from '@perfsense/metrics-core';
-import { PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime } from '@perfsense/metrics-musicblocks';
+import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
+import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
 import type { MetricPlugin } from '@perfsense/core';
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
@@ -14,15 +14,10 @@ const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   LCP: { warning: 5, fail: 10 },
 };
 
-const ALL_PLUGINS: Record<string, new () => MetricPlugin> = {
-  ttfb: TTFB,
-  fcp: FCP,
-  lcp: LCP,
-  playbacklatency: PlaybackLatency,
-  audiodrift: AudioDrift,
-  stageupdatetime: StageUpdateTime,
-  blockthroughput: BlockThroughput,
-  projectloadtime: ProjectLoadTime,
+/** Same registry the benchmark command resolves metrics from, so check sees every metric. */
+const PLUGIN_REGISTRY: Record<string, new () => MetricPlugin> = {
+  ...CORE_PLUGIN_REGISTRY,
+  ...MUSICBLOCKS_PLUGIN_REGISTRY
 };
 
 function getMetricNames(runs: PageResult['runs']): string[] {
@@ -108,7 +103,7 @@ function buildPluginsFromMetrics(metricNames: string[]): MetricPlugin[] {
   const plugins: MetricPlugin[] = [];
   for (const name of metricNames) {
     const key = name.toLowerCase();
-    const Cls = ALL_PLUGINS[key];
+    const Cls = PLUGIN_REGISTRY[key];
     if (Cls) {
       plugins.push(new Cls());
     }
