@@ -2,6 +2,13 @@
   "pages": ["examples/music-blocks/pages/fast-project.html",
             "examples/music-blocks/pages/slow-project.html"],
   "runs": 11,
+  "scenarios": {
+    "fast-project.html": ["bootstrap", "openProject", "playToCompletion", "saveExport"],
+    "slow-project.html": ["openProject", "playToCompletion"]
+  },
+  "fixtures": {
+    "fast-project.html": "examples/music-blocks/pages/fast-project.html"
+  },
   "thresholds": {
     "playbackLatency": { "warning": 20, "fail": 50 },
     "audioDrift":      { "warning": 15, "fail": 30 },
