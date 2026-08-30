@@ -4,6 +4,7 @@ import path from 'path';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import type { MetricPlugin, BenchmarkConfig, BenchmarkRun, PageResult } from '@perfsense/core';
+import { runScenario, isScenario } from './scenarios';
 
 export function isUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -95,6 +96,26 @@ export class BenchmarkDriver {
                 for (const plugin of plugins) {
                   if (plugin.setupPostNav) {
                     await plugin.setupPostNav(page);
+                  }
+                }
+
+                if (this.config.scenario && isScenario(this.config.scenario)) {
+                  const fixtureAbs = this.config.fixtures ? this.config.fixtures[pageName] : undefined;
+                  if (this.config.scenario === 'openProject' && fixtureAbs) {
+                    try {
+                      await page.setInputFiles('#myOpenFile', fixtureAbs);
+                    } catch (e) {
+                      console.warn(`  [${this.config.scenario}] no file input (${(e as Error).message})`);
+                    }
+                  }
+                  try {
+                    await runScenario(this.config.scenario, page, {
+                      fixtureName: fixtureAbs ? path.basename(fixtureAbs) : undefined,
+                      // Honor the running budget; the per-run timeout stays in charge.
+                      timeoutMs: RUN_TIMEOUT_MS
+                    });
+                  } catch (e) {
+                    console.warn(`  [${this.config.scenario}] scenario failed (${(e as Error).message})`);
                   }
                 }
 

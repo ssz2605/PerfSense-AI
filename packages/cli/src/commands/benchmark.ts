@@ -2,7 +2,13 @@ import path from 'path';
 import fs from 'fs';
 import { BenchmarkDriver, isUrl } from '@perfsense/driver-playwright';
 import { LCP, FCP, TTFB } from '@perfsense/metrics-core';
-import { PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime } from '@perfsense/metrics-musicblocks';
+import {
+  PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime,
+  CallbackLatencyMean, CallbackLatencyMax, CumulativeDrift, VoiceOnsetError,
+  ExecutionTime, MaxQueueDepth, BlocksExecuted, MaxDepth,
+  HeapAfterBoot, MemoryDelta, RetainedHeap, SaveTime, ExportMIDITime,
+  BootstrapTotal, InitTotal
+} from '@perfsense/metrics-musicblocks';
 import { median } from '@perfsense/statistics';
 import type { MetricPlugin } from '@perfsense/core';
 
@@ -10,6 +16,8 @@ interface ConfigFile {
   pages?: string[];
   runs?: number;
   metrics?: string[];
+  scenario?: string;
+  fixtures?: Record<string, string>;
   thresholds?: Record<string, { warning: number; fail: number }>;
 }
 
@@ -22,6 +30,21 @@ const ALL_PLUGINS: Record<string, new () => MetricPlugin> = {
   stageUpdateTime: StageUpdateTime,
   blockThroughput: BlockThroughput,
   projectLoadTime: ProjectLoadTime,
+  callbackLatencyMean: CallbackLatencyMean,
+  callbackLatencyMax: CallbackLatencyMax,
+  cumulativeDrift: CumulativeDrift,
+  voiceOnsetError: VoiceOnsetError,
+  executionTime: ExecutionTime,
+  maxQueueDepth: MaxQueueDepth,
+  blocksExecuted: BlocksExecuted,
+  maxDepth: MaxDepth,
+  heapAfterBoot: HeapAfterBoot,
+  memoryDelta: MemoryDelta,
+  retainedHeap: RetainedHeap,
+  saveTime: SaveTime,
+  exportMIDITime: ExportMIDITime,
+  bootstrapTotal: BootstrapTotal,
+  initTotal: InitTotal,
 };
 
 const DEFAULT_METRICS = ['ttfb', 'fcp', 'lcp'];
@@ -31,6 +54,8 @@ interface Args {
   runs: number;
   out: string;
   metrics: string[];
+  scenario?: string;
+  fixtures?: Record<string, string>;
 }
 
 function parseArgs(argv: string[]): Args {
@@ -39,6 +64,7 @@ function parseArgs(argv: string[]): Args {
   let out = 'results.json';
   let metrics: string[] | undefined;
   let configPath: string | undefined;
+  let scenario: string | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--pages' && i + 1 < argv.length) {
@@ -49,10 +75,14 @@ function parseArgs(argv: string[]): Args {
       out = argv[++i];
     } else if (argv[i] === '--metrics' && i + 1 < argv.length) {
       metrics = argv[++i].split(',');
+    } else if (argv[i] === '--scenario' && i + 1 < argv.length) {
+      scenario = argv[++i];
     } else if (argv[i] === '--config' && i + 1 < argv.length) {
       configPath = argv[++i];
     }
   }
+
+  const fixtures: Record<string, string> = {};
 
   // Load config file if specified
   if (configPath) {
@@ -60,15 +90,22 @@ function parseArgs(argv: string[]): Args {
     if (fs.existsSync(resolved)) {
       try {
         const config: ConfigFile = JSON.parse(fs.readFileSync(resolved, 'utf-8'));
+        const configDir = path.dirname(resolved);
         if (config.pages && pages.length === 0) pages.push(...config.pages);
         if (config.runs !== undefined && !argv.includes('--runs')) runs = config.runs;
         if (config.metrics && !metrics) metrics = config.metrics;
+        if (config.scenario && !scenario) scenario = config.scenario;
+        if (config.fixtures) {
+          for (const [pageName, rel] of Object.entries(config.fixtures)) {
+            fixtures[pageName] = path.isAbsolute(rel) ? rel : path.resolve(configDir, rel);
+          }
+        }
       } catch (err) {
-        console.error(`Error: could not parse config file: ${resolved}`);
+        console.error('Error: could not parse config file: ' + resolved);
         process.exit(1);
       }
     } else {
-      console.error(`Error: config file not found: ${resolved}`);
+      console.error('Error: config file not found: ' + resolved);
       process.exit(1);
     }
   }
@@ -78,7 +115,7 @@ function parseArgs(argv: string[]): Args {
     process.exit(1);
   }
 
-  return { pages, runs, out, metrics: metrics ?? DEFAULT_METRICS };
+  return { pages, runs, out, metrics: metrics ?? DEFAULT_METRICS, scenario, fixtures };
 }
 
 export async function run(argv: string[]): Promise<void> {
@@ -96,6 +133,8 @@ export async function run(argv: string[]): Promise<void> {
     runs: args.runs,
     settleMs: 1500,
     port: 8934,
+    scenario: args.scenario,
+    fixtures: args.fixtures && Object.keys(args.fixtures).length > 0 ? args.fixtures : undefined
   });
 
   const plugins: MetricPlugin[] = args.metrics.map((name) => {

@@ -25,6 +25,10 @@ export interface BenchmarkConfig {
   runs: number;
   settleMs: number;
   port: number;
+  /** Optional interaction scenario applied to every page (keyed by page name when `fixtures` is set). */
+  scenario?: string;
+  /** Fixture file name per page name, used by the openProject scenario. */
+  fixtures?: Record<string, string>;
 }
 
 export interface BaselineMetricStats {

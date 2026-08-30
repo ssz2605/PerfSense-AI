@@ -102,6 +102,89 @@ describe('GitHub Action E2E', () => {
     }
   }, 120000);
 
+  it('records real music-blocks seam metrics through scenarios', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perfsense-seams-'));
+    try {
+      const pagesDir = path.join(workDir, 'pages');
+      fs.cpSync(path.join(examplesDir, 'pages'), pagesDir, { recursive: true });
+
+      const config = {
+        pages: ['pages/fast-project.html'],
+        runs: 3,
+        scenario: 'playToCompletion',
+        metrics: [
+          'ttfb', 'callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift',
+          'voiceOnsetError', 'executionTime', 'maxQueueDepth', 'blocksExecuted',
+          'maxDepth', 'memoryDelta', 'retainedHeap'
+        ],
+      };
+      const configPath = path.join(workDir, 'perfsense.config.json');
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      execSync(
+        `node "${path.join(rootDir, 'packages', 'cli', 'dist', 'index.js')}" benchmark --config "${configPath}" --out "${path.join(workDir, 'results.json')}"`,
+        { cwd: workDir, stdio: 'pipe', timeout: 120000 },
+      );
+
+      const results = JSON.parse(fs.readFileSync(path.join(workDir, 'results.json'), 'utf-8'));
+      expect(results).toBeInstanceOf(Array);
+      expect(results[0]).toHaveProperty('runs');
+      expect(results[0].runs.length).toBe(3);
+
+      const run0 = results[0].runs[0].metrics;
+      expect(run0.callbackLatencyMean).toBeTypeOf('number');
+      expect(run0.callbackLatencyMax).toBeTypeOf('number');
+      expect(run0.cumulativeDrift).toBeTypeOf('number');
+      expect(run0.voiceOnsetError).toBeTypeOf('number');
+      expect(run0.executionTime).toBeTypeOf('number');
+      expect(run0.maxQueueDepth).toBeTypeOf('number');
+      expect(run0.blocksExecuted).toBeGreaterThan(0);
+      expect(run0.maxDepth).toBeGreaterThan(0);
+    } finally {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); }
+      catch {
+        setTimeout(() => {
+          try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+        }, 1000);
+      }
+    }
+  }, 120000);
+
+  it('records bootstrap and open-project scenario metrics', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perfsense-boot-'));
+    try {
+      const pagesDir = path.join(workDir, 'pages');
+      fs.cpSync(path.join(examplesDir, 'pages'), pagesDir, { recursive: true });
+
+      const config = {
+        pages: ['pages/fast-project.html'],
+        runs: 2,
+        scenario: 'bootstrap',
+        metrics: ['ttfb', 'bootstrapTotal', 'initTotal', 'heapAfterBoot'],
+      };
+      const configPath = path.join(workDir, 'perfsense.config.json');
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      execSync(
+        `node "${path.join(rootDir, 'packages', 'cli', 'dist', 'index.js')}" benchmark --config "${configPath}" --out "${path.join(workDir, 'results.json')}"`,
+        { cwd: workDir, stdio: 'pipe', timeout: 60000 },
+      );
+
+      const results = JSON.parse(fs.readFileSync(path.join(workDir, 'results.json'), 'utf-8'));
+      const run0 = results[0].runs[0].metrics;
+      expect(run0.bootstrapTotal).toBe(22);
+      expect(run0.initTotal).toBe(583);
+      expect(run0.heapAfterBoot).toBeTypeOf('number');
+    } finally {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); }
+      catch {
+        setTimeout(() => {
+          try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+        }, 1000);
+      }
+    }
+  }, 60000);
+
   it('shouldSkipBenchmark returns correct values', () => {
     const { shouldSkipBenchmark: fn } = require(path.join(rootDir, 'packages', 'cli', 'dist', 'commands', 'cache'));
     expect(fn(['README.md', 'CONTRIBUTING.md'])).toBe(true);

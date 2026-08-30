@@ -12,8 +12,25 @@
 <h1>Fast Project</h1>
 <div id="blocks"></div>
 <canvas id="stage" width="400" height="300"></canvas>
+<button id="play">Play</button>
+<input type="file" id="myOpenFile" style="display:none">
 <script>
 (function () {
+  function makeQueue() {
+    var list = [];
+    list.getNext = function () { return list.shift(); };
+    return list;
+  }
+
+  var queueA = makeQueue();
+  var queueB = makeQueue();
+  var turtleA = { name: 'turtle0', queue: queueA, running: true };
+  var turtleB = { name: 'turtle1', queue: queueB, running: true };
+
+  function fillQueues() {
+    for (var i = 0; i < 12; i++) { queueA.push('a' + i); queueB.push('b' + i); }
+  }
+
   var mb = {
     _callbacks: {},
 
@@ -52,10 +69,109 @@
 
     loadProject: function (data, cb) {
       setTimeout(cb, 5);
+    },
+
+    logo: {
+      synth: {
+        transport: {
+          schedule: function (cb, time) {
+            var ctx = mb.logo.synth.transport._ctx;
+            var t = typeof time === 'number' ? time : 0;
+            setTimeout(function () {
+              var audioTime = t + (Math.random() * 0.02 - 0.01);
+              cb(audioTime + (ctx.currentTime - t));
+            }, Math.max(1, Math.round(t * 1000)));
+            return 'evt-' + Math.random();
+          },
+          stop: function () {}
+        }
+      },
+      runFromBlockNow: function (turtle, blk, isflow, receivedArg, queueStart) {
+        // Simulate a small synchronous execution burst plus shallow nesting.
+        var n = 0;
+        for (var i = 0; i < 200; i++) {
+          if (isflow && i < 3) { this.runFromBlockNow(turtle, blk, false, receivedArg, queueStart); }
+          n += Math.sqrt(i + 1);
+        }
+        return n;
+      },
+      isRunning: function () { return mb.runner.running; }
+    },
+
+    runner: {
+      running: false,
+
+      isRunning: function () { return mb.runner.running; },
+
+      start: function () {
+        if (this.running) return;
+        this.running = true;
+        fillQueues();
+
+        // Drain queues with a mix of shifts (queue.getNext) and pops, invoking
+        // runFromBlockNow per block so the execution collector records counts.
+        var drain = function () {
+          if (queueA.length + queueB.length === 0) { mb.runner.running = false; return; }
+          mb.logo.runFromBlockNow(turtleA, {}, true, null, true);
+          mb.logo.runFromBlockNow(turtleB, {}, false, null, false);
+          queueA.shift();
+          queueB.pop();
+          setTimeout(drain, 1);
+        };
+        drain();
+
+        // Schedule a known transport chain for the drift collector.
+        var ctx = { currentTime: 1.0 };
+        mb.logo.synth.transport._ctx = ctx;
+        var t = 0;
+        for (var k = 0; k < 8; k++) {
+          mb.logo.synth.transport.schedule(function () { return ctx.currentTime + 0; }, t);
+          t += 0.1;
+        }
+      }
+    },
+
+    /* eslint-disable-next-line no-undef */
+    turtles: [turtleA, turtleB],
+
+    ui: {
+      save: function () { return new Promise(function (r) { setTimeout(r, 3); }); },
+      exportMIDI: function () { return new Promise(function (r) { setTimeout(r, 5); }); }
     }
   };
 
   window.__mb = mb;
+
+  window.__mbPerf = {
+    measures: {
+      bootstrapStart: 12,
+      bootstrapEnd: 34,
+      initTotal: 583
+    }
+  };
+
+  document.getElementById('play').addEventListener('click', function () { mb.runner.start(); });
+
+  // Emission of a full project (load time includes the decode + render).
+  document.getElementById('myOpenFile').addEventListener('change', function (ev) {
+    var file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      setTimeout(function () {
+        var blocks = document.getElementById('blocks');
+        blocks.textContent = '';
+        for (var i = 0; i < 10; i++) {
+          var div = document.createElement('div');
+          div.className = 'block';
+          div.textContent = 'block ' + i;
+          div.style.cssText = 'display:inline-block;padding:6px 12px;margin:4px;background:#bbf7d0;border-radius:4px;';
+          blocks.appendChild(div);
+        }
+      }, 8);
+    };
+    reader.readAsText(file);
+  });
 
   // Render some blocks for visual interest
   (function renderBlocks() {
