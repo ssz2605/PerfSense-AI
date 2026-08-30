@@ -4,7 +4,8 @@ import path from 'path';
 import { chromium } from 'playwright';
 import type { Browser, Page } from 'playwright';
 import type { MetricPlugin, BenchmarkConfig, BenchmarkRun, PageResult } from '@perfsense/core';
-import { runScenario, isScenario } from './scenarios';
+import { runScenario, isScenario, Scenario } from './scenarios';
+import type { ScenarioName } from './scenarios';
 
 export function isUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -25,6 +26,21 @@ export function pageNameFromUrl(url: string): string {
 }
 
 const RUN_TIMEOUT_MS = 120000;
+
+/**
+ * Ordered interaction phases for a page. The per-page `scenarios` map wins when
+ * it names that page; otherwise a single global scenario applies. Unknown phase
+ * names are filtered out so bad config degrades to a no-op run, not a crash.
+ */
+function stagePhases(scenariosForPage: string[] | undefined, globalScenario: string | undefined): ScenarioName[] {
+  if (scenariosForPage && scenariosForPage.length > 0) {
+    return scenariosForPage.filter(isScenario);
+  }
+  if (globalScenario && isScenario(globalScenario)) {
+    return [globalScenario];
+  }
+  return [];
+}
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -78,7 +94,14 @@ export class BenchmarkDriver {
         const url = isUrl(pageInput) ? pageInput : `http://localhost:${port}/${pageName}`;
         const pageRuns: BenchmarkRun[] = [];
 
-        console.log(`\nBenchmarking ${pageName} (${runs} runs) ...`);
+        // Ordered interaction phases for this page: the config's per-page map
+        // wins when present, otherwise the single global scenario.
+        const pagePhases: ScenarioName[] = stagePhases(
+          this.config.scenarios ? this.config.scenarios[pageName] : undefined,
+          this.config.scenario
+        );
+
+        console.log(`\nBenchmarking ${pageName} (${runs} runs)${pagePhases.length > 0 ? `, phases: ${pagePhases.join(' → ')}` : ''} ...`);
 
         for (let i = 0; i < runs; i++) {
           try {
@@ -99,23 +122,23 @@ export class BenchmarkDriver {
                   }
                 }
 
-                if (this.config.scenario && isScenario(this.config.scenario)) {
-                  const fixtureAbs = this.config.fixtures ? this.config.fixtures[pageName] : undefined;
-                  if (this.config.scenario === 'openProject' && fixtureAbs) {
+                const fixtureAbs = this.config.fixtures ? this.config.fixtures[pageName] : undefined;
+                for (const phase of pagePhases) {
+                  if (phase === Scenario.OpenProject && fixtureAbs) {
                     try {
                       await page.setInputFiles('#myOpenFile', fixtureAbs);
                     } catch (e) {
-                      console.warn(`  [${this.config.scenario}] no file input (${(e as Error).message})`);
+                      console.warn(`  [${phase}] no file input (${(e as Error).message})`);
                     }
                   }
                   try {
-                    await runScenario(this.config.scenario, page, {
+                    await runScenario(phase, page, {
                       fixtureName: fixtureAbs ? path.basename(fixtureAbs) : undefined,
                       // Honor the running budget; the per-run timeout stays in charge.
                       timeoutMs: RUN_TIMEOUT_MS
                     });
                   } catch (e) {
-                    console.warn(`  [${this.config.scenario}] scenario failed (${(e as Error).message})`);
+                    console.warn(`  [${phase}] scenario failed (${(e as Error).message})`);
                   }
                 }
 

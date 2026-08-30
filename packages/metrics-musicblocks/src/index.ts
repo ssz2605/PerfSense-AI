@@ -18,6 +18,7 @@ export { SaveTime } from './saveTime';
 export { ExportMIDITime } from './exportMIDITime';
 export { BootstrapTotal } from './bootstrapTotal';
 export { InitTotal } from './initTotal';
+export { MUSICBLOCKS_PLUGIN_REGISTRY } from './registry';
 export {
   installTransportCollector,
   installExecutionCollector,

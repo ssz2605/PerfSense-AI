@@ -1,14 +1,8 @@
 import path from 'path';
 import fs from 'fs';
 import { BenchmarkDriver, isUrl } from '@perfsense/driver-playwright';
-import { LCP, FCP, TTFB } from '@perfsense/metrics-core';
-import {
-  PlaybackLatency, AudioDrift, StageUpdateTime, BlockThroughput, ProjectLoadTime,
-  CallbackLatencyMean, CallbackLatencyMax, CumulativeDrift, VoiceOnsetError,
-  ExecutionTime, MaxQueueDepth, BlocksExecuted, MaxDepth,
-  HeapAfterBoot, MemoryDelta, RetainedHeap, SaveTime, ExportMIDITime,
-  BootstrapTotal, InitTotal
-} from '@perfsense/metrics-musicblocks';
+import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
+import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
 import { median } from '@perfsense/statistics';
 import type { MetricPlugin } from '@perfsense/core';
 
@@ -17,34 +11,14 @@ interface ConfigFile {
   runs?: number;
   metrics?: string[];
   scenario?: string;
+  scenarios?: Record<string, string[]>;
   fixtures?: Record<string, string>;
   thresholds?: Record<string, { warning: number; fail: number }>;
 }
 
-const ALL_PLUGINS: Record<string, new () => MetricPlugin> = {
-  ttfb: TTFB,
-  fcp: FCP,
-  lcp: LCP,
-  playbackLatency: PlaybackLatency,
-  audioDrift: AudioDrift,
-  stageUpdateTime: StageUpdateTime,
-  blockThroughput: BlockThroughput,
-  projectLoadTime: ProjectLoadTime,
-  callbackLatencyMean: CallbackLatencyMean,
-  callbackLatencyMax: CallbackLatencyMax,
-  cumulativeDrift: CumulativeDrift,
-  voiceOnsetError: VoiceOnsetError,
-  executionTime: ExecutionTime,
-  maxQueueDepth: MaxQueueDepth,
-  blocksExecuted: BlocksExecuted,
-  maxDepth: MaxDepth,
-  heapAfterBoot: HeapAfterBoot,
-  memoryDelta: MemoryDelta,
-  retainedHeap: RetainedHeap,
-  saveTime: SaveTime,
-  exportMIDITime: ExportMIDITime,
-  bootstrapTotal: BootstrapTotal,
-  initTotal: InitTotal,
+const PLUGIN_REGISTRY: Record<string, new () => MetricPlugin> = {
+  ...CORE_PLUGIN_REGISTRY,
+  ...MUSICBLOCKS_PLUGIN_REGISTRY
 };
 
 const DEFAULT_METRICS = ['ttfb', 'fcp', 'lcp'];
@@ -55,6 +29,7 @@ interface Args {
   out: string;
   metrics: string[];
   scenario?: string;
+  scenarios?: Record<string, string[]>;
   fixtures?: Record<string, string>;
 }
 
@@ -65,6 +40,7 @@ function parseArgs(argv: string[]): Args {
   let metrics: string[] | undefined;
   let configPath: string | undefined;
   let scenario: string | undefined;
+  let scenarios: Record<string, string[]> | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--pages' && i + 1 < argv.length) {
@@ -95,6 +71,7 @@ function parseArgs(argv: string[]): Args {
         if (config.runs !== undefined && !argv.includes('--runs')) runs = config.runs;
         if (config.metrics && !metrics) metrics = config.metrics;
         if (config.scenario && !scenario) scenario = config.scenario;
+        if (config.scenarios) scenarios = config.scenarios;
         if (config.fixtures) {
           for (const [pageName, rel] of Object.entries(config.fixtures)) {
             fixtures[pageName] = path.isAbsolute(rel) ? rel : path.resolve(configDir, rel);
@@ -115,7 +92,7 @@ function parseArgs(argv: string[]): Args {
     process.exit(1);
   }
 
-  return { pages, runs, out, metrics: metrics ?? DEFAULT_METRICS, scenario, fixtures };
+  return { pages, runs, out, metrics: metrics ?? DEFAULT_METRICS, scenario, scenarios, fixtures };
 }
 
 export async function run(argv: string[]): Promise<void> {
@@ -134,13 +111,14 @@ export async function run(argv: string[]): Promise<void> {
     settleMs: 1500,
     port: 8934,
     scenario: args.scenario,
+    scenarios: args.scenarios,
     fixtures: args.fixtures && Object.keys(args.fixtures).length > 0 ? args.fixtures : undefined
   });
 
   const plugins: MetricPlugin[] = args.metrics.map((name) => {
-    const Cls = ALL_PLUGINS[name];
+    const Cls = PLUGIN_REGISTRY[name.toLowerCase()];
     if (!Cls) {
-      console.error(`Error: unknown metric "${name}". Available: ${Object.keys(ALL_PLUGINS).join(', ')}`);
+      console.error(`Error: unknown metric "${name}". Available: ${Object.keys(PLUGIN_REGISTRY).join(', ')}`);
       process.exit(1);
     }
     return new Cls();

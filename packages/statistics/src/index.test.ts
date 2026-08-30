@@ -143,4 +143,23 @@ describe('classifyRegression', () => {
     expect(result.pValue).toBeNull();
     expect(result.effectSize).toBeNull();
   });
+
+  it('runs the statistical check at N = MIN_RUNS (5)', () => {
+    const result = classifyRegression([100, 100, 100, 100, 100], [200, 200, 200, 200, 200], thresholds);
+    expect(result.pValue).not.toBeNull();
+    expect(result.effectSize).not.toBeNull();
+    expect(result.status).toBe('regression');
+  });
+
+  it('requires both p-value and effect size for a regression (AND rule)', () => {
+    // Median regresses 21% (over the 20% fail threshold) but the distributions
+    // overlap heavily, so the Mann-Whitney p stays above 0.05.
+    const result = classifyRegression(
+      [100, 100, 100, 100, 100],
+      [60, 120, 121, 122, 130],
+      { warning: 5, fail: 20 }
+    );
+    expect(result.status).toBe('warning');
+    expect(result.pValue).toBeGreaterThan(0.05);
+  });
 });

@@ -109,6 +109,13 @@ export interface ClassificationResult {
   details: string;
 }
 
+/** Minimum number of runs per group before a statistical verdict is computed. */
+export const MIN_RUNS = 5;
+/** Minimum |Cliff's delta| an effect must reach to be considered meaningful. */
+export const EFFECT_SIZE_THRESHOLD = 0.147;
+/** Maximum p-value accepted as "statistically significant" (two-sided). */
+export const P_VALUE_THRESHOLD = 0.05;
+
 export function classifyRegression(
   baseline: number[],
   current: number[],
@@ -123,7 +130,7 @@ export function classifyRegression(
   let pValue: number | null = null;
   let effectSize: number | null = null;
   let confidenceInterval: [number, number] | null = null;
-  const enoughData = baseline.length >= 6 && current.length >= 6;
+  const enoughData = baseline.length >= MIN_RUNS && current.length >= MIN_RUNS;
 
   if (enoughData) {
     pValue = mannWhitneyU(baseline, current);
@@ -135,10 +142,11 @@ export function classifyRegression(
   let details: string;
 
   if (enoughData && pValue !== null && effectSize !== null) {
-    if (deltaPercent >= thresholds.fail && (pValue < 0.05 || effectSize > 0.5)) {
+    const significant = pValue < P_VALUE_THRESHOLD && effectSize >= EFFECT_SIZE_THRESHOLD;
+    if (deltaPercent >= thresholds.fail && significant) {
       status = 'regression';
       details = `delta=${deltaPercent.toFixed(1)}% exceeds fail threshold ${thresholds.fail}% ` +
-        `and ${pValue < 0.05 ? `p=${pValue.toFixed(4)} < 0.05` : `d=${effectSize.toFixed(2)} > 0.5`}`;
+        `and p=${pValue.toFixed(4)} < ${P_VALUE_THRESHOLD}, d=${effectSize.toFixed(2)} >= ${EFFECT_SIZE_THRESHOLD}`;
     } else if (deltaPercent >= thresholds.warning) {
       status = 'warning';
       details = `delta=${deltaPercent.toFixed(1)}% exceeds warning threshold ${thresholds.warning}%` +

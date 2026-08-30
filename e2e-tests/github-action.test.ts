@@ -185,6 +185,51 @@ describe('GitHub Action E2E', () => {
     }
   }, 60000);
 
+  it('runs per-page composite scenarios through the phases engine', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perfsense-phases-'));
+    try {
+      const pagesDir = path.join(workDir, 'pages');
+      fs.cpSync(path.join(examplesDir, 'pages'), pagesDir, { recursive: true });
+
+      // A real fixture file so openProject has something to read.
+      const fixturePath = path.join(pagesDir, 'sample-project.html');
+      fs.writeFileSync(fixturePath, '<html><body>sample project</body></html>');
+
+      const config = {
+        pages: ['pages/fast-project.html'],
+        runs: 2,
+        scenarios: { 'fast-project.html': ['openProject', 'playToCompletion', 'saveExport'] },
+        fixtures: { 'fast-project.html': fixturePath },
+        metrics: ['projectLoadTime', 'executionTime', 'saveTime', 'exportMIDITime', 'blocksExecuted', 'maxQueueDepth'],
+      };
+      const configPath = path.join(workDir, 'perfsense.config.json');
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+      execSync(
+        `node "${path.join(rootDir, 'packages', 'cli', 'dist', 'index.js')}" benchmark --config "${configPath}" --out "${path.join(workDir, 'results.json')}"`,
+        { cwd: workDir, stdio: 'pipe', timeout: 120000 },
+      );
+
+      const results = JSON.parse(fs.readFileSync(path.join(workDir, 'results.json'), 'utf-8'));
+      expect(results[0].runs.length).toBe(2);
+
+      const run0 = results[0].runs[0].metrics;
+      expect(run0.projectLoadTime).toBeTypeOf('number');
+      expect(run0.executionTime).toBeTypeOf('number');
+      expect(run0.saveTime).toBeTypeOf('number');
+      expect(run0.exportMIDITime).toBeTypeOf('number');
+      expect(run0.blocksExecuted).toBeGreaterThan(0);
+      expect(run0.maxQueueDepth).toBeTypeOf('number');
+    } finally {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); }
+      catch {
+        setTimeout(() => {
+          try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+        }, 1000);
+      }
+    }
+  }, 120000);
+
   it('shouldSkipBenchmark returns correct values', () => {
     const { shouldSkipBenchmark: fn } = require(path.join(rootDir, 'packages', 'cli', 'dist', 'commands', 'cache'));
     expect(fn(['README.md', 'CONTRIBUTING.md'])).toBe(true);

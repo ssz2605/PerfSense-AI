@@ -84,20 +84,37 @@ const openProjectSnippet = `
   const openStart = performance.now();
   const mb = (window).__mb || {};
   const bridgeMark = (mb.perfMarks && typeof mb.perfMarks.openStart === 'number') ? mb.perfMarks.openStart : null;
-  // Wait for the project to be rendered: block table populated (falling back
-  // to the bridge's ready flag when the app provides it).
-  for (;;) {
-    let loaded = false;
-    if (mb.blocks && typeof mb.blocks.projectLoaded === 'function') {
-      loaded = mb.blocks.projectLoaded();
+  // "Render ready" means the block table stopped growing: two consecutive
+  // samples taken ~400ms apart equal each other (and are nonzero). This stays
+  // robust to chunked project loading, where node count climbs while the
+  // project is decoded and rendered.
+  const blockCount = () => (document.querySelectorAll('#blockTable .block, .blockTable .block, #blocks .block')).length;
+  const waitStable = async () => {
+    let prev = -1;
+    let rounds = 0;
+    for (;;) {
+      if (Date.now() - startMs > timeoutMs) return false;
+      const cur = blockCount();
+      if (cur === prev && cur > 0) {
+        rounds += 1;
+        if (rounds >= 2) return true;
+      } else {
+        rounds = 0;
+      }
+      prev = cur;
+      await new Promise((r) => setTimeout(r, 400));
     }
-    const blockCount = (document.querySelectorAll('#blockTable .block, .blockTable .block')).length;
-    if (loaded || blockCount > 0) {
-      await new Promise((r) => setTimeout(r, 300));
-      break;
+  };
+  let ready = await waitStable();
+  if (!ready) {
+    // No renderable block table (e.g. minimal mocks): fall back to the bridge's
+    // ready flag, then settle so the app finishes any async decode.
+    for (;;) {
+      const bridgeLoaded = mb.blocks && typeof mb.blocks.projectLoaded === 'function' && mb.blocks.projectLoaded();
+      if (bridgeLoaded || Date.now() - startMs > timeoutMs) break;
+      await new Promise((r) => setTimeout(r, 100));
     }
-    if (Date.now() - startMs > timeoutMs) break;
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 300));
   }
   const openEnd = performance.now();
   const elapsed = bridgeMark !== null ? (openEnd - bridgeMark) : (openEnd - openStart);
