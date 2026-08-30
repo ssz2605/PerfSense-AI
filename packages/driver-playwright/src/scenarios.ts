@@ -58,10 +58,10 @@ const bootstrapSnippet = `
   };
   if (typeof ps.bootstrapTotal !== 'number') {
     const s = pick(['bootstrapStart']); const e = pick(['bootstrapEnd']);
-    ps.bootstrapTotal = (s !== null && e !== null && e > s) ? (e - s) : pick(['bootstrapTotal', 'bootTime']);
+    ps.bootstrapTotal = (s !== null && e !== null && e > s) ? (e - s) : pick(['bootstrapTotal', 'bootTime', 'loader_to_activity_init_complete']);
   }
   if (typeof ps.initTotal !== 'number') {
-    ps.initTotal = pick(['initTotal', 'setupDependenciesTotal', 'initTime']);
+    ps.initTotal = pick(['initTotal', 'setupDependenciesTotal', 'initTime', 'activity.init_total']);
   }
   if (typeof ps.heapAfterBoot !== 'number') {
     const mem = (window).performance.memory;

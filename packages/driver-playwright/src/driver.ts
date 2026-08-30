@@ -139,7 +139,7 @@ export class BenchmarkDriver {
                 plugins.map((p) => {
                   const v = runMetrics[p.name];
                   const unit = p.meta.unit === 'blocks/s' ? 'blk/s' : p.meta.unit;
-                  return `${p.name}: ${v !== null ? v.toFixed(1) : 'null'}${unit}`;
+                  return `${p.name}: ${v !== null && v !== undefined ? v.toFixed(1) : 'null'}${unit}`;
                 }).join(', ');
               console.log(line);
             });

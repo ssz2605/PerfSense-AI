@@ -178,7 +178,24 @@ export async function readPerfsense(page: Page): Promise<Record<string, number |
   return page.evaluate(() => {
     const ps = (window as any).__perfsense || {};
     const t = ps.transport || null;
-    const out: Record<string, number | null> = {};
+    const out: Record<string, number | null> = {
+      callbackLatencyMean: null,
+      callbackLatencyMax: null,
+      cumulativeDrift: null,
+      voiceOnsetError: null,
+      blocksExecuted: null,
+      maxDepth: null,
+      executionTime: null,
+      maxQueueDepth: null,
+      projectLoadTime: null,
+      saveTime: null,
+      exportMIDITime: null,
+      bootstrapTotal: null,
+      initTotal: null,
+      heapAfterBoot: null,
+      memoryDelta: null,
+      retainedHeap: null
+    };
     const mean = (arr: number[]) =>
       arr.length === 0 ? null : arr.reduce((s, v) => s + v, 0) / arr.length;
     if (t) {
