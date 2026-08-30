@@ -27,6 +27,12 @@ export interface BenchmarkConfig {
   port: number;
   /** Optional interaction scenario applied to every page (keyed by page name when `fixtures` is set). */
   scenario?: string;
+  /**
+   * Ordered interaction phases per page name. Each phase runs in sequence inside
+   * one page so composites like "openProject then playToCompletion" work on a
+   * single measured run. Takes precedence over `scenario` for pages that list one.
+   */
+  scenarios?: Record<string, string[]>;
   /** Fixture file name per page name, used by the openProject scenario. */
   fixtures?: Record<string, string>;
 }
