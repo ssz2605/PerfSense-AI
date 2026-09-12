@@ -53,12 +53,12 @@ export function generatePRComment(
   lines.push('## PerfSense AI - Performance Report');
   lines.push('');
   lines.push('### Summary');
-  lines.push('| Metric | Baseline | Current | Delta | Status |');
-  lines.push('|--------|----------|---------|-------|--------|');
+  lines.push('| Page | Metric | Baseline | Current | Delta | Status |');
+  lines.push('|------|--------|----------|---------|-------|--------|');
   for (const r of result.results) {
     const sign = r.deltaPercent >= 0 ? '+' : '';
     const statusIcon = r.status === 'REGRESSION' ? ':x:' : r.status === 'WARNING' ? ':warning:' : ':white_check_mark:';
-    lines.push(`| ${r.metric} | ${formatValue(r.baselineMedian, r.unit)} | ${formatValue(r.currentMedian, r.unit)} | ${sign}${r.deltaPercent.toFixed(1)}% | ${statusIcon} |`);
+    lines.push(`| ${r.page} | ${r.metric} | ${formatValue(r.baselineMedian, r.unit)} | ${formatValue(r.currentMedian, r.unit)} | ${sign}${r.deltaPercent.toFixed(1)}% | ${statusIcon} |`);
   }
   lines.push('');
 

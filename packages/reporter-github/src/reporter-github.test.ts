@@ -18,7 +18,7 @@ describe('generatePRComment', () => {
 
   it('contains a summary table', () => {
     const comment = generatePRComment(mockCheckResult);
-    expect(comment).toContain('| Metric | Baseline | Current | Delta | Status |');
+    expect(comment).toContain('| Page | Metric | Baseline | Current | Delta | Status |');
     expect(comment).toContain('LCP');
     expect(comment).toContain('FCP');
   });
