@@ -101,7 +101,13 @@ export class BenchmarkDriver {
     const pagesDir = process.cwd();
     const hasLocalPages = pages.some((p) => !isUrl(p));
     const server = hasLocalPages ? await this.startServer(pagesDir) : null;
-    const browser: Browser = await chromium.launch();
+    // Headless Chromium blocks AudioContext autoplay by default, which stalls
+    // Tone.js scheduling — and therefore the transport seam (latency / drift)
+    // and real playback itself. Lift the gesture requirement so scheduled
+    // notes actually fire on benchmarked pages.
+    const browser: Browser = await chromium.launch({
+      args: ["--autoplay-policy=no-user-gesture-required"],
+    });
 
     try {
       for (const pageInput of pages) {
@@ -182,12 +188,20 @@ export class BenchmarkDriver {
                       // stability wait burns the whole run budget. `window.__mb` is
                       // only created at the END of init, so absence of the bridge
                       // at this point does NOT mean the page is a static mock.
-                      // Wait for init-complete = bridge present OR real boot
-                      // measures landed (mocks set __mbPerf.measures inline, so
-                      // they pass immediately and are never delayed).
-                      const ready = await page.evaluate(
+                      // Static mocks set window.__mb synchronously at parse time; the real
+                      // Music Blocks app creates the bridge only at the END of
+                      // activity init (seconds after "load"). A bridge present
+                      // at the first check is the mock signal — mocks attach
+                      // the #myOpenFile handler at parse time, so they are
+                      // ready immediately. The real app must wait for
+                      // `bridged` (mb.ui && mb.blocks) so the fixture drop
+                      // cannot race the change handler and get silently
+                      // swallowed (phantom projectLoadTime).
+                      const gate = await page.evaluate(
                         async (timeoutMs: number) => {
                           const start = Date.now();
+                          const isMock = !!
+                            ((window as any).__mb && (window as any).__mb.ui);
                           for (;;) {
                             const perf = (window as any).__mbPerf;
                             const measures =
@@ -197,18 +211,56 @@ export class BenchmarkDriver {
                             );
                             const mb = (window as any).__mb;
                             const bridged = !!(mb && mb.ui && mb.blocks);
-                            if (bridged || booted) return true;
-                            if (Date.now() - start > timeoutMs) return false;
+                            if (isMock ? bridged || booted : bridged) {
+                              return { ready: true, isMock };
+                            }
+                            if (Date.now() - start > timeoutMs) {
+                              return { ready: false, isMock };
+                            }
                             await new Promise((r) => setTimeout(r, 100));
                           }
                         },
                         120000,
                       );
+                      const ready = gate.ready;
+                      const isMockPage = gate.isMock;
                       if (ready) {
                         await page.setInputFiles("#myOpenFile", fixtureAbs);
                         console.log(
                           `    file dropped at +${Date.now() - runStartT0}ms`,
                         );
+                        // Verify the fixture actually opened. The app's change
+                        // listener records perfMarks.openStart the moment the
+                        // file input fires, so its presence proves the drop was
+                        // not swallowed. Fail the run loudly instead of letting
+                        // a phantom load produce a fake constant projectLoadTime.
+                        // Mocks have no perfMarks seam, so verify real app
+                        // pages only.
+                        const opened = isMockPage
+                          ? true
+                          : await page.evaluate(
+                          async (timeoutMs: number) => {
+                            const start = Date.now();
+                            for (;;) {
+                              const mb = (window as any).__mb;
+                              if (
+                                mb &&
+                                mb.perfMarks &&
+                                typeof mb.perfMarks.openStart === "number"
+                              ) {
+                                return true;
+                              }
+                              if (Date.now() - start > timeoutMs) return false;
+                              await new Promise((r) => setTimeout(r, 100));
+                            }
+                          },
+                          30000,
+                        );
+                        if (!opened) {
+                          throw new Error(
+                            `fixture ${fixtureAbs} never opened: #myOpenFile change handler did not fire within 30s`,
+                          );
+                        }
                       } else {
                         console.warn(
                           "  [openProject] app never became init-complete; skipping file drop",

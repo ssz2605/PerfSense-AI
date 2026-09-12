@@ -268,10 +268,47 @@ const playToCompletionSnippet = `
 
   const startRun = async () => {
     await new Promise((r) => setTimeout(r, 50));
+    // Preferred: the benchmark bridge's start (calls doFastButton, guarded by
+    // the app's _alreadyRunning flag). The #play element is re-rendered by
+    // renderPlayIcon() on the real app, so clicking the stale element after
+    // init is a no-op and yields an empty run (executionTime == the grace
+    // period, drift 0). The bridge is the only path that reliably starts
+    // playback; the click remains as a fallback for static mocks.
+    if (mb.runner && typeof mb.runner.start === 'function') { mb.runner.start(); return; }
     const playBtn = document.getElementById('play');
     if (playBtn) { playBtn.click(); return; }
-    if (mb.runner && typeof mb.runner.start === 'function') { mb.runner.start(); return; }
     if (mb.logo && typeof mb.logo.run === 'function') { mb.logo.run(); return; }
+  };
+
+  // Prove playback actually started. The app begins asynchronously after
+  // startRun, so poll isRunning() briefly. A page whose run never starts must
+  // fail the sample loudly (null metrics) instead of absorbing the waitDone
+  // grace period and reporting a constant bogus executionTime.
+  const beginRun = async () => {
+    await startRun();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      if (isRunning()) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  };
+
+  const failMarked = (reason) => {
+    ps.playbackFailed = true;
+    ps.exec = null;
+    ps.maxQueueDepth = null;
+    ps.maxActionDepth = null;
+    console.warn('[perfsense] playback never started (' + reason + '); run is invalid');
+    return {
+      executionTime: null,
+      maxQueueDepth: null,
+      maxActionDepth: null,
+      blocksExecuted: null,
+      maxDepth: null,
+      memoryDelta: null,
+      retainedHeap: null
+    };
   };
 
   // Stop playback via the app's own path (doStopTurtles also cancels scheduled
@@ -337,7 +374,9 @@ const playToCompletionSnippet = `
     // Warm-up run feeds the retained-memory pattern; executionTime is read from
     // the second run so cold-start allocations do not contaminate it.
     const memBefore = mem();
-    await startRun();
+    if (!(await beginRun())) {
+      return failMarked('warm-up run');
+    }
     await waitDone(timeoutMs);
     const memAfterFirst = mem();
 
@@ -347,6 +386,7 @@ const playToCompletionSnippet = `
     await stopRun();
     if (ps.exec) { ps.exec.blocksExecuted = 0; ps.exec.maxDepth = 0; }
     maxAction = 0;
+    maxQ = 0;
     if (ps.transport) {
       ps.transport.latencies = [];
       ps.transport.scheduledTx = [];
@@ -357,7 +397,9 @@ const playToCompletionSnippet = `
     }
 
     const runStart = performance.now();
-    await startRun();
+    if (!(await beginRun())) {
+      return failMarked('measured run');
+    }
     await waitDone(timeoutMs);
     const runEnd = performance.now();
     const memAfterSecond = mem();
