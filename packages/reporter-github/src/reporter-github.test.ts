@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generatePRComment } from './index';
+import { generatePRComment, formatValue } from './index';
 import type { CheckResult } from './index';
 
 const mockCheckResult: CheckResult = {
@@ -102,5 +102,46 @@ describe('generatePRComment', () => {
     const comment = generatePRComment(resultWithCross);
     expect(comment).toContain('Cross-Metric Causes');
     expect(comment).toContain('Layout recalculation affects both LCP and FCP');
+  });
+});
+
+describe('formatValue', () => {
+  it('formats milliseconds with one decimal', () => {
+    expect(formatValue(1850, 'ms')).toBe('1850.0ms');
+  });
+
+  it('falls back to ms when unit is absent (backward compatible)', () => {
+    expect(formatValue(420)).toBe('420.0ms');
+  });
+
+  it('formats bytes without decimals', () => {
+    expect(formatValue(47400000, 'B')).toBe('47400000B');
+  });
+
+  it('formats counts without a unit suffix', () => {
+    expect(formatValue(15, '')).toBe('15');
+    expect(formatValue(15.5, '')).toBe('15.5');
+  });
+
+  it('formats blocks/s with blk/s suffix', () => {
+    expect(formatValue(12.345, 'blocks/s')).toBe('12.3blk/s');
+  });
+});
+
+describe('generatePRComment units', () => {
+  it('renders per-metric units instead of hardcoding ms', () => {
+    const result: CheckResult = {
+      results: [
+        { page: 'p', metric: 'blocksExecuted', status: 'PASS', deltaPercent: 0, baselineMedian: 15, currentMedian: 15, failThreshold: 25, unit: '' },
+        { page: 'p', metric: 'heapAfterBoot', status: 'PASS', deltaPercent: 0, baselineMedian: 47400000, currentMedian: 47400000, failThreshold: 30, unit: 'B' },
+        { page: 'p', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: -1, baselineMedian: 5540.9, currentMedian: 5483.6, failThreshold: 25, unit: 'ms' },
+      ],
+      summary: { pass: 3, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result);
+    expect(comment).toContain('| blocksExecuted | 15 | 15 |');
+    expect(comment).toContain('| heapAfterBoot | 47400000B | 47400000B |');
+    expect(comment).toContain('| bootstrapTotal | 5540.9ms | 5483.6ms |');
+    expect(comment).not.toContain('15.0ms');
   });
 });

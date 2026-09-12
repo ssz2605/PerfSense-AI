@@ -10,6 +10,7 @@ import { CumulativeDrift } from './cumulativeDrift';
 import { VoiceOnsetError } from './voiceOnsetError';
 import { ExecutionTime } from './executionTime';
 import { MaxQueueDepth } from './maxQueueDepth';
+import { MaxActionDepth } from './maxActionDepth';
 import { BlocksExecuted } from './blocksExecuted';
 import { MaxDepth } from './maxDepth';
 import { HeapAfterBoot } from './heapAfterBoot';
@@ -37,6 +38,7 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   voiceonseterror: VoiceOnsetError,
   executiontime: ExecutionTime,
   maxqueuedepth: MaxQueueDepth,
+  maxactiondepth: MaxActionDepth,
   blocksexecuted: BlocksExecuted,
   maxdepth: MaxDepth,
   heapafterboot: HeapAfterBoot,

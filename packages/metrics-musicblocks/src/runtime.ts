@@ -100,6 +100,7 @@ function runEndPollSnippet(timeoutMs: number, settleMs: number): string {
       if (mb && mb.turtles) {
         const list =
           Array.isArray(mb.turtles) ? mb.turtles :
+          Array.isArray(mb.turtles.turtleList) ? mb.turtles.turtleList :
           Array.isArray(mb.turtles.turtles) ? mb.turtles.turtles : [];
         for (let i = 0; i < list.length; i++) {
           if (list[i] && Array.isArray(list[i].queue) && list[i].queue.length > 0) return true;
@@ -154,6 +155,7 @@ export async function readPerfsense(
       voiceOnsetError: null,
       blocksExecuted: null,
       maxDepth: null,
+      maxActionDepth: null,
       executionTime: null,
       maxQueueDepth: null,
       projectLoadTime: null,
@@ -192,6 +194,8 @@ export async function readPerfsense(
       out.blocksExecuted = ps.exec.blocksExecuted;
       out.maxDepth = ps.exec.maxDepth === 0 ? null : ps.exec.maxDepth;
     }
+    if (typeof ps.maxActionDepth === "number")
+      out.maxActionDepth = ps.maxActionDepth;
     if (typeof ps.executionTime === "number")
       out.executionTime = ps.executionTime;
     if (typeof ps.maxQueueDepth === "number")

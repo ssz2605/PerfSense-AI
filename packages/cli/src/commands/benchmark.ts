@@ -174,6 +174,14 @@ export async function run(argv: string[]): Promise<void> {
   console.log(`\nSaved raw results to ${outPath}`);
 
   console.log("\n=== Median summary ===");
+  const pluginUnits: Record<string, string> = {};
+  for (const p of plugins) pluginUnits[p.name] = p.meta.unit;
+  const formatSummary = (value: number, unit: string): string => {
+    if (unit === "B") return `${Math.round(value)}B`;
+    if (unit === "blocks/s") return `${value.toFixed(1)}blk/s`;
+    if (unit === "") return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+    return `${value.toFixed(1)}${unit || "ms"}`;
+  };
   for (const pageResult of results) {
     const pluginNames = plugins.map((p) => p.name);
     const medians: Record<string, number> = {};
@@ -184,10 +192,7 @@ export async function run(argv: string[]): Promise<void> {
       medians[name] = values.length > 0 ? median(values) : 0;
     }
     const line = pluginNames
-      .map(
-        (name) =>
-          `${name}=${medians[name].toFixed(1)}${name === "blockThroughput" ? "" : "ms"}`,
-      )
+      .map((name) => `${name}=${formatSummary(medians[name], pluginUnits[name])}`)
       .join("  ");
     console.log(`${pageResult.page}: ${line}`);
   }

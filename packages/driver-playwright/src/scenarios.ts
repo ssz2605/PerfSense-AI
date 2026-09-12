@@ -239,6 +239,18 @@ const playToCompletionSnippet = `
     };
   }
 
+  // Resolve the real turtle array. window.__mb.turtles is the Turtles
+  // container, whose array lives behind the turtleList getter; reading
+  // .turtles (a legacy name that does not exist on the container) made the
+  // pending-work check and the queue sampler see an empty list, so
+  // maxQueueDepth stayed ~0 on real runs.
+  const turtleArray = () => {
+    if (Array.isArray(mb.turtles)) return mb.turtles;
+    if (mb.turtles && Array.isArray(mb.turtles.turtleList)) return mb.turtles.turtleList;
+    if (mb.turtles && Array.isArray(mb.turtles.turtles)) return mb.turtles.turtles;
+    return [];
+  };
+
   const isRunning = () => {
     if (mb.runner && typeof mb.runner.isRunning === 'function' && mb.runner.isRunning()) return true;
     if (mb.turtles && typeof mb.turtles.running === 'function' && mb.turtles.running()) return true;
@@ -247,10 +259,9 @@ const playToCompletionSnippet = `
     // fires. Without this, waitDone returns after the sync segment only.
     if (ps.transport && ps.transport.pending > 0) return true;
     if (mb.logo && typeof mb.logo.isRunning === 'function' && mb.logo.isRunning()) return true;
-    const list = Array.isArray(mb.turtles) ? mb.turtles :
-      (mb.turtles && Array.isArray(mb.turtles.turtles)) ? mb.turtles.turtles : [];
-    for (let i = 0; i < list.length; i++) {
-      if (list[i] && Array.isArray(list[i].queue) && list[i].queue.length > 0) return true;
+    for (let i = 0; i < turtleArray().length; i++) {
+      const tur = turtleArray()[i];
+      if (tur && Array.isArray(tur.queue) && tur.queue.length > 0) return true;
     }
     return false;
   };
@@ -300,12 +311,22 @@ const playToCompletionSnippet = `
   };
 
   let maxQ = 0;
+  let maxAction = 0;
   const sampler = window.setInterval(() => {
-    const list = Array.isArray(mb.turtles) ? mb.turtles :
-      (mb.turtles && Array.isArray(mb.turtles.turtles)) ? mb.turtles.turtles : [];
+    const list = turtleArray();
     let total = 0;
     for (let i = 0; i < list.length; i++) {
-      if (list[i] && Array.isArray(list[i].queue)) total += list[i].queue.length;
+      const tur = list[i];
+      if (!tur) continue;
+      const queueLen = Array.isArray(tur.queue) ? tur.queue.length : 0;
+      const flowLen = Array.isArray(tur.parentFlowQueue) ? tur.parentFlowQueue.length : 0;
+      total += queueLen;
+      // Action depth: one turtle's pending queue plus its stacked flow
+      // parents (Do/Repeat/action-call blocks awaiting completion). This is
+      // the semantic the old maxDepth was conflated with; maxDepth now means
+      // JS call-stack nesting only, so action depth gets its own probe.
+      const action = queueLen + flowLen;
+      if (action > maxAction) maxAction = action;
     }
     if (total > maxQ) maxQ = total;
   }, 25);
@@ -325,6 +346,7 @@ const playToCompletionSnippet = `
     // metrics describe the measured run only.
     await stopRun();
     if (ps.exec) { ps.exec.blocksExecuted = 0; ps.exec.maxDepth = 0; }
+    maxAction = 0;
     if (ps.transport) {
       ps.transport.latencies = [];
       ps.transport.scheduledTx = [];
@@ -342,6 +364,7 @@ const playToCompletionSnippet = `
 
     ps.executionTime = runEnd - runStart;
     ps.maxQueueDepth = maxQ;
+    ps.maxActionDepth = maxAction;
     if (memBefore !== null && memAfterFirst !== null) ps.memoryDelta = memAfterFirst - memBefore;
     if (memBefore !== null && memAfterSecond !== null) ps.retainedHeap = memAfterSecond - memBefore;
   } finally {
@@ -351,6 +374,7 @@ const playToCompletionSnippet = `
   return {
     executionTime: ps.executionTime,
     maxQueueDepth: ps.maxQueueDepth,
+    maxActionDepth: ps.maxActionDepth,
     blocksExecuted: ps.exec ? ps.exec.blocksExecuted : null,
     maxDepth: ps.exec ? ps.exec.maxDepth : null,
     memoryDelta: ps.memoryDelta,

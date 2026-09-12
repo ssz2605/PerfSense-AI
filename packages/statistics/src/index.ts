@@ -115,11 +115,22 @@ export const MIN_RUNS = 5;
 export const EFFECT_SIZE_THRESHOLD = 0.147;
 /** Maximum p-value accepted as "statistically significant" (two-sided). */
 export const P_VALUE_THRESHOLD = 0.05;
+/**
+ * Default absolute noise floor (in metric units) for the zero-baseline rule.
+ *
+ * Relative deltas are meaningless when both medians sit below measurement
+ * precision (e.g. cumulativeDrift values around 1e-13, all-zero queue/memory
+ * counters): complete separation of two noise distributions then yields
+ * p<0.05, |d|=1 and an absurd percent delta (+200% on 0.0 vs 0.0), which
+ * previously posted as REGRESSION on no-change PRs. Callers may override
+ * per metric via thresholds.absEpsilon.
+ */
+export const DEFAULT_ABS_EPSILON = 1e-9;
 
 export function classifyRegression(
   baseline: number[],
   current: number[],
-  thresholds: { warning: number; fail: number }
+  thresholds: { warning: number; fail: number; absEpsilon?: number; maxStatus?: 'pass' | 'warning' }
 ): ClassificationResult {
   const baselineMedian = median(baseline);
   const currentMedian = median(current);
@@ -127,6 +138,18 @@ export function classifyRegression(
     ? (currentMedian > 0 ? 100 : 0)
     : ((currentMedian - baselineMedian) / baselineMedian) * 100;
 
+  const absEpsilon = thresholds.absEpsilon ?? DEFAULT_ABS_EPSILON;
+  const absDelta = currentMedian - baselineMedian;
+  if (Math.abs(baselineMedian) < absEpsilon && Math.abs(absDelta) < absEpsilon) {
+    return {
+      status: 'pass',
+      deltaPercent,
+      pValue: null,
+      effectSize: null,
+      confidenceInterval: null,
+      details: `both medians below noise floor (|baseline|=${baselineMedian}, |delta|=${absDelta} < epsilon=${absEpsilon}); treated as no change`,
+    };
+  }
   let pValue: number | null = null;
   let effectSize: number | null = null;
   let confidenceInterval: [number, number] | null = null;
@@ -168,5 +191,33 @@ export function classifyRegression(
     }
   }
 
-  return { status, deltaPercent, pValue, effectSize, confidenceInterval, details };
+  return capStatus({ status, deltaPercent, pValue, effectSize, confidenceInterval, details }, thresholds.maxStatus);
+}
+
+/**
+ * Caps a classification at a ceiling status. This is how metrics with
+ * unproven probes (queue depth, memory, drift) stay visible as warnings
+ * without ever posting REGRESSION: astronomical relative deltas from
+ * zero/residue baselines would otherwise sail past any finite fail
+ * threshold (e.g. residue 5e-13 -> 5 reads as +1e15%).
+ */
+function capStatus(
+  result: ClassificationResult,
+  maxStatus: 'pass' | 'warning' | undefined
+): ClassificationResult {
+  if (maxStatus === 'warning' && result.status === 'regression') {
+    return {
+      ...result,
+      status: 'warning',
+      details: result.details + ` [capped at warning by maxStatus]`
+    };
+  }
+  if (maxStatus === 'pass' && result.status !== 'pass') {
+    return {
+      ...result,
+      status: 'pass',
+      details: result.details + ` [capped at pass by maxStatus]`
+    };
+  }
+  return result;
 }

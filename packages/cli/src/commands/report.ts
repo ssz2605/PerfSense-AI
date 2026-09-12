@@ -5,6 +5,26 @@ import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
 import { correlate, type CorrelationInput, type CorrelationResult } from '@perfsense/correlation-engine';
 import { generatePRComment, type CheckResult, type CheckResultEntry } from '@perfsense/reporter-github';
+import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
+import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
+import type { MetricPlugin } from '@perfsense/core';
+
+/** Same registry the benchmark command resolves metrics from. */
+const PLUGIN_REGISTRY: Record<string, new () => MetricPlugin> = {
+  ...CORE_PLUGIN_REGISTRY,
+  ...MUSICBLOCKS_PLUGIN_REGISTRY
+};
+
+/** Display unit for a metric name; undefined when the metric is unknown. */
+function getMetricUnit(metric: string): string | undefined {
+  const Cls = PLUGIN_REGISTRY[metric.toLowerCase()];
+  if (!Cls) return undefined;
+  try {
+    return new Cls().meta.unit;
+  } catch {
+    return undefined;
+  }
+}
 
 const DEFAULT_THRESHOLDS: Record<string, { warning: number; fail: number }> = {
   TTFB: { warning: 10, fail: 30 },
@@ -137,7 +157,7 @@ export async function run(argv: string[]): Promise<void> {
         else status = 'PASS';
       }
 
-      allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail });
+      allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail, unit: getMetricUnit(metric) });
       if (status === 'REGRESSION') hasRegression = true;
     }
   }

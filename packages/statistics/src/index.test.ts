@@ -163,3 +163,69 @@ describe('classifyRegression', () => {
     expect(result.pValue).toBeGreaterThan(0.05);
   });
 });
+
+describe('classifyRegression zero-baseline / noise-floor rule', () => {
+  it('0 -> 0 passes', () => {
+    const result = classifyRegression([0, 0, 0, 0, 0], [0, 0, 0, 0, 0], { warning: 10, fail: 20 });
+    expect(result.status).toBe('pass');
+  });
+
+  it('0 -> tiny noise passes (below epsilon)', () => {
+    const result = classifyRegression([0, 0, 0, 0, 0], [1e-12, 2e-12, 1e-12, 3e-12, 2e-12], { warning: 10, fail: 20 });
+    expect(result.status).toBe('pass');
+  });
+
+  it('0 -> 5 is warning-only under demoted fail thresholds, never regression', () => {
+    const result = classifyRegression([0, 0, 0, 0, 0], [5, 5, 5, 5, 5], { warning: 10, fail: 10000 });
+    expect(result.status).toBe('warning');
+  });
+
+  it('0 -> 100 with normal fail threshold and separated groups is regression', () => {
+    const result = classifyRegression([0, 0, 0, 0, 0], [100, 100, 100, 100, 100], { warning: 10, fail: 20 });
+    expect(result.status).toBe('regression');
+    expect(result.pValue).not.toBeNull();
+  });
+
+  it('x -> 0 (improvement) passes', () => {
+    const result = classifyRegression([100, 100, 100, 100, 100], [0, 0, 0, 0, 0], { warning: 10, fail: 20 });
+    expect(result.status).toBe('pass');
+  });
+
+  it('epsilon-scale baseline -> normal value follows the normal rule (capped warn-only when demoted)', () => {
+    const baseline = [5.6e-13, 5.6e-13, 1.4e-12, 1.1e-13, 2.2e-13];
+    const demoted = { warning: 10, fail: 10000, maxStatus: 'warning' as const };
+    const result = classifyRegression(baseline, [5, 5, 5, 5, 5], demoted);
+    expect(result.status).toBe('warning');
+    expect(result.details).toContain('maxStatus');
+  });
+
+  it('maxStatus caps an otherwise-significant regression at warning', () => {
+    const result = classifyRegression(
+      [100, 100, 100, 100, 100],
+      [200, 200, 200, 200, 200],
+      { warning: 10, fail: 20, maxStatus: 'warning' }
+    );
+    expect(result.status).toBe('warning');
+  });
+
+  it('zero baseline with insufficient samples still respects the noise floor', () => {
+    const result = classifyRegression([0, 0, 0], [0, 0, 0], { warning: 10, fail: 20 });
+    expect(result.status).toBe('pass');
+    expect(result.pValue).toBeNull();
+  });
+
+  it('live #15 false positive is killed: drift residue distributions pass', () => {
+    // Baseline medians ~5.7e-13 vs current ~1.7e-12 complete separation
+    // previously yielded p<0.05, |d|=1, +200% -> REGRESSION on a no-change PR.
+    const baseline = [5.68e-13, 5.68e-13, 1.47e-12, 1.13e-13, 2.27e-13];
+    const current = [1.7e-12, 1.8e-12, 1.6e-12, 1.75e-12, 1.65e-12];
+    const result = classifyRegression(baseline, current, { warning: 30, fail: 10000 });
+    expect(result.status).toBe('pass');
+    expect(result.details).toContain('noise floor');
+  });
+
+  it('custom absEpsilon override is honored', () => {
+    const result = classifyRegression([0, 0, 0, 0, 0], [0.5, 0.5, 0.5, 0.5, 0.5], { warning: 10, fail: 20, absEpsilon: 1 });
+    expect(result.status).toBe('pass');
+  });
+});

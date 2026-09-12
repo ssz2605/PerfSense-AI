@@ -9,6 +9,12 @@ export interface CheckResultEntry {
   baselineMedian: number;
   currentMedian: number;
   failThreshold: number;
+  /**
+   * Display unit from the metric plugin's meta (e.g. 'ms', 'B', '' for
+   * counts). Optional for backward compatibility; absent units fall back
+   * to the legacy 'ms' rendering. Statistics never consume this field.
+   */
+  unit?: string;
   evidence?: RankedEvidence[];
 }
 
@@ -22,6 +28,17 @@ export interface CheckResult {
   };
   correlation?: CorrelationResult;
   correlationError?: string;
+}
+
+/**
+ * Display-only value formatting. Statistics consume raw numbers and never
+ * see this; changing units here cannot alter classification.
+ */
+export function formatValue(value: number, unit?: string): string {
+  if (unit === 'B') return `${Math.round(value)}B`;
+  if (unit === 'blocks/s') return `${value.toFixed(1)}blk/s`;
+  if (unit === '') return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+  return `${value.toFixed(1)}${unit ?? 'ms'}`;
 }
 
 export function generatePRComment(
@@ -41,7 +58,7 @@ export function generatePRComment(
   for (const r of result.results) {
     const sign = r.deltaPercent >= 0 ? '+' : '';
     const statusIcon = r.status === 'REGRESSION' ? ':x:' : r.status === 'WARNING' ? ':warning:' : ':white_check_mark:';
-    lines.push(`| ${r.metric} | ${r.baselineMedian.toFixed(1)}ms | ${r.currentMedian.toFixed(1)}ms | ${sign}${r.deltaPercent.toFixed(1)}% | ${statusIcon} |`);
+    lines.push(`| ${r.metric} | ${formatValue(r.baselineMedian, r.unit)} | ${formatValue(r.currentMedian, r.unit)} | ${sign}${r.deltaPercent.toFixed(1)}% | ${statusIcon} |`);
   }
   lines.push('');
 
