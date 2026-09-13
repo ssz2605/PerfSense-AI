@@ -1,76 +1,180 @@
 import { describe, it, expect } from 'vitest';
-import { generatePRComment, formatValue } from './index';
-import type { CheckResult } from './index';
+import { generatePRComment, type CheckResult } from './index';
+import type { LikelyCause } from '@perfsense/correlation-engine';
 
-const mockCheckResult: CheckResult = {
-  results: [
-    { page: 'test', metric: 'LCP', status: 'REGRESSION', deltaPercent: 15.3, baselineMedian: 1850, currentMedian: 2134, failThreshold: 10 },
-    { page: 'test', metric: 'FCP', status: 'PASS', deltaPercent: 1.9, baselineMedian: 420, currentMedian: 428, failThreshold: 10 },
-  ],
-  summary: { pass: 1, warning: 0, regression: 1, failed: true },
-};
+const PR_27 = { pr: '27', head: 'c46d920', baselineRef: 'origin/master', matrix: 'Music Blocks Benchmark Matrix' };
 
-describe('generatePRComment', () => {
-  it('contains the report header', () => {
-    const comment = generatePRComment(mockCheckResult);
-    expect(comment).toContain('PerfSense AI - Performance Report');
+function makeEntry(partial?: Partial<CheckResult['results'][number]>) {
+  return {
+    page: 'RainbowConnection.html',
+    metric: 'exportMIDITime',
+    status: 'PASS' as const,
+    deltaPercent: 0,
+    baselineMedian: 1000,
+    currentMedian: 1000,
+    failThreshold: 10,
+    ...partial,
+  };
+}
+
+function makeCause(partial?: Partial<LikelyCause>): LikelyCause {
+  return {
+    description: 'Git diff: 1 file changed, 1 perf-sensitive change(s)',
+    source: 'js/SaveInterface.js:42',
+    confidence: 'direct',
+    evidenceIds: ['git-export'],
+    rationale:
+      'The diff changes js/SaveInterface.js:42, which is on the code path measured by exportMIDITime. ' +
+      'The change is performance-sensitive: Scheduling delay increased (500ms → 2500ms). ' +
+      'The change adds work or delay, which is consistent with the observed +159.4% slower result for exportMIDITime.',
+    causeEvidence: {
+      file: 'js/SaveInterface.js',
+      line: 42,
+      function: 'afterSaveMIDI()',
+      changeType: 'Scheduling delay increased (500ms → 2500ms)',
+      direction: 'increased',
+      metric: 'exportMIDITime',
+      deltaPercent: 159.4,
+    },
+    ...partial,
+  };
+}
+
+describe('matrix filtering', () => {
+  it('shows only Benchmark Matrix fixture/metric combinations', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMean', status: 'PASS', deltaPercent: 1.2, baselineMedian: 40, currentMedian: 40.5 }),
+        // Not part of the approved Frère Jacques matrix — must not appear.
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7, baselineMedian: 8959, currentMedian: 11977 }),
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'executionTime', status: 'REGRESSION', deltaPercent: 9.9, baselineMedian: 100, currentMedian: 110 }),
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'maxActionDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
+        makeEntry({ page: 'crabcanon-plot.html', metric: 'scheduleLagMean', status: 'PASS', deltaPercent: -2, baselineMedian: 12, currentMedian: 11.8 }),
+        // Extra raw metric that is not part of the crabcanon matrix.
+        makeEntry({ page: 'crabcanon-plot.html', metric: 'retainedHeap', status: 'REGRESSION', deltaPercent: 50, baselineMedian: 1000, currentMedian: 1500 }),
+      ],
+      summary: { pass: 2, warning: 0, regression: 4, failed: true },
+    };
+    const comment = generatePRComment(result, PR_27);
+
+    expect(comment).toContain('callbackLatencyMean');
+    expect(comment).toContain('scheduleLagMean');
+    expect(comment).not.toContain('projectLoadTime');
+    expect(comment).not.toContain('executionTime');
+    expect(comment).not.toContain('maxActionDepth');
+    expect(comment).not.toContain('retainedHeap');
   });
 
-  it('contains a summary table', () => {
-    const comment = generatePRComment(mockCheckResult);
-    expect(comment).toContain('| Page | Metric | Baseline | Current | Delta | Status |');
-    expect(comment).toContain('LCP');
-    expect(comment).toContain('FCP');
+  it('keeps metrics associated with their fixture (no global grouping)', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'PASS', deltaPercent: 0, baselineMedian: 8959, currentMedian: 8959 }),
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0, baselineMedian: 5370, currentMedian: 5370 }),
+      ],
+      summary: { pass: 2, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    // Rainbow Connection section contains projectLoadTime.
+    const rainbowIdx = comment.indexOf('### Rainbow Connection');
+    const projectIdx = comment.indexOf('projectLoadTime');
+    const emptyIdx = comment.indexOf('### index.html (bootstrap)');
+    expect(rainbowIdx).toBeGreaterThan(-1);
+    expect(emptyIdx).toBeGreaterThan(rainbowIdx);
+    expect(projectIdx).toBeGreaterThan(rainbowIdx);
+  });
+});
+
+describe('professional grouping and statuses', () => {
+  it('renders each fixture once as a section with grouped metrics', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'PASS', deltaPercent: -1 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'memoryDelta', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 }),
+      ],
+      summary: { pass: 4, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment.match(/### Rainbow Connection/g)).toHaveLength(1);
+    expect(comment.match(/### index\.html \(bootstrap\)/g)).toHaveLength(1);
+    const rainbow = comment.split('### index.html (bootstrap)')[0];
+    expect(rainbow).toContain('exportMIDITime');
+    expect(rainbow).toContain('saveTime');
+    expect(rainbow).toContain('memoryDelta');
   });
 
-  it('shows regression entries with details', () => {
-    const comment = generatePRComment(mockCheckResult);
-    expect(comment).toContain(':x:');
-    expect(comment).toContain('LCP');
-    expect(comment).toContain('+15.3%');
+  it('uses professional text statuses, not emojis or icons', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'WARNING', deltaPercent: 12 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'memoryDelta', status: 'PASS', deltaPercent: -4 }),
+      ],
+      summary: { pass: 2, warning: 1, regression: 1, failed: true },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('| Passed |');
+    expect(comment).toContain('| Warning |');
+    expect(comment).toContain('| Regression |');
+    expect(comment).toContain('| Improved |');
+    expect(comment).not.toContain(':x:');
+    expect(comment).not.toContain(':warning:');
+    expect(comment).not.toContain(':white_check_mark:');
+    expect(comment).not.toContain('✅');
+    expect(comment).not.toContain('❌');
+    expect(comment).not.toContain('⚠');
+    expect(comment).not.toContain('🚀');
   });
 
-  it('includes AI analysis section when provided', () => {
-    const comment = generatePRComment(mockCheckResult, 'This is an AI analysis');
-    expect(comment).toContain('<summary>AI Analysis</summary>');
-    expect(comment).toContain('This is an AI analysis');
+  it('marks maxDepth as Unverified and excludes it from regressions', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'musical-tree.html', metric: 'maxDepth', status: 'REGRESSION', deltaPercent: 200, baselineMedian: 1, currentMedian: 3 }),
+        makeEntry({ page: 'musical-tree.html', metric: 'executionTime', status: 'PASS', deltaPercent: 0 }),
+      ],
+      summary: { pass: 1, warning: 0, regression: 1, failed: true },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('| maxDepth | 1 | 3 | +200.0% | Unverified |');
+    // Not treated as a genuine regression: absent from the regressions section.
+    expect(comment).not.toContain('### maxDepth');
   });
+});
 
-  it('does not include AI section when not provided', () => {
-    const comment = generatePRComment(mockCheckResult);
-    expect(comment).not.toContain('<summary>AI Analysis</summary>');
-  });
-
-  it('includes artifacts section', () => {
-    const comment = generatePRComment(mockCheckResult);
-    expect(comment).toContain('<summary>Artifacts</summary>');
-  });
-
-  it('handles no regressions gracefully', () => {
-    const passResult: CheckResult = {
-      results: [{ page: 'test', metric: 'FCP', status: 'PASS', deltaPercent: 1, baselineMedian: 400, currentMedian: 404, failThreshold: 10 }],
+describe('report structure', () => {
+  it('contains header context and required sections in order', () => {
+    const result: CheckResult = {
+      results: [makeEntry({})],
       summary: { pass: 1, warning: 0, regression: 0, failed: false },
     };
-    const comment = generatePRComment(passResult);
-    expect(comment).toContain('No regressions detected.');
+    const comment = generatePRComment(result, PR_27);
+    expect(comment.startsWith('# PerfSense Performance Report')).toBe(true);
+    expect(comment).toContain('PR: 27');
+    expect(comment).toContain('Head: c46d920');
+    expect(comment).toContain('Baseline: origin/master');
+    expect(comment).toContain('Matrix: Music Blocks Benchmark Matrix');
+    const summaryIdx = comment.indexOf('## Performance Summary');
+    const regressionsIdx = comment.indexOf('## Performance Regressions');
+    const artifactsIdx = comment.indexOf('## Artifacts');
+    expect(summaryIdx).toBeGreaterThan(-1);
+    expect(regressionsIdx).toBeGreaterThan(summaryIdx);
+    expect(artifactsIdx).toBeGreaterThan(regressionsIdx);
+    expect(comment).toContain('No performance regressions detected.');
+    expect(comment).toContain('- [Full results JSON](./perfsense-results.json)');
   });
 
-  it('includes source location and blame when present', () => {
-    const resultWithCorrelation: CheckResult = {
-      ...mockCheckResult,
+  it('does not expose confidence or internal correlation scores', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
       correlation: {
         metrics: {
-          lcp: {
-            regression: { metric: 'LCP', baselineMedian: 1850, currentMedian: 2134, deltaPercent: 15.3, pValue: 0.01, effectSize: 0.8, confidenceInterval: [2000, 2200] },
+          exportMIDITime: {
+            regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] },
             evidence: [],
-            likelyCause: {
-              description: 'Layout recalculation took 312ms',
-              source: 'Stage.ts:142',
-              confidence: 'direct' as any,
-              evidenceIds: ['trace-1'],
-              sourceLocation: { originalFile: 'src/components/Stage.ts', originalLine: 142, originalColumn: 5, minifiedFile: 'bundle.js', minifiedLine: 1056, confidence: 'exact' as any },
-              blame: { commit: 'a1b2c3d4e5f6', author: 'shrey', email: 'shrey@test.com', date: '2026-01-01', message: 'Add animated block transitions', line: 142, confidence: 'exact' as any },
-            },
+            likelyCause: makeCause(),
             filteredEvidence: 0,
           },
         },
@@ -78,70 +182,91 @@ describe('generatePRComment', () => {
         summary: { totalRegressions: 1, metricsWithCause: 1, metricsInconclusive: 0 },
       },
     };
-    const comment = generatePRComment(resultWithCorrelation);
-    expect(comment).toContain('src/components/Stage.ts:142');
-    expect(comment).toContain('a1b2c3d');
-    expect(comment).toContain('@shrey');
-    expect(comment).toContain('Add animated block transitions');
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).not.toContain('direct');
+    expect(comment).not.toContain('strong');
+    expect(comment).not.toContain('relevance');
+    expect(comment).not.toContain('confidence');
+    expect(comment).not.toContain('High');
+    expect(comment).not.toContain('Low');
   });
+});
 
-  it('includes cross-metric causes', () => {
-    const resultWithCross: CheckResult = {
-      ...mockCheckResult,
+describe('AI reasoning / root cause', () => {
+  it('renders likely cause, function, line and evidence-based AI analysis', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4, baselineMedian: 1678.6, currentMedian: 4354.2 })],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
       correlation: {
         metrics: {
-          lcp: { regression: { metric: 'LCP', baselineMedian: 1850, currentMedian: 2134, deltaPercent: 15.3, pValue: 0.01, effectSize: 0.8, confidenceInterval: [2000, 2200] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
-          fcp: { regression: { metric: 'FCP', baselineMedian: 420, currentMedian: 480, deltaPercent: 14.3, pValue: 0.01, effectSize: 0.7, confidenceInterval: [450, 500] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
+          exportMIDITime: {
+            regression: { metric: 'exportMIDITime', baselineMedian: 1678.6, currentMedian: 4354.2, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [4000, 4700] },
+            evidence: [],
+            likelyCause: makeCause(),
+            filteredEvidence: 0,
+          },
+        },
+        crossMetricCauses: [],
+        summary: { totalRegressions: 1, metricsWithCause: 1, metricsInconclusive: 0 },
+      },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('### exportMIDITime — +159.4%');
+    expect(comment).toContain('**Likely cause:** `js/SaveInterface.js:42`');
+    expect(comment).toContain('**Function:** afterSaveMIDI()');
+    expect(comment).toContain('**AI analysis:**');
+    expect(comment).toContain('on the code path measured by exportMIDITime');
+    expect(comment).toContain('Scheduling delay increased (500ms → 2500ms)');
+    expect(comment).toContain('consistent with the observed +159.4% slower result');
+  });
+
+  it('renders "No likely cause identified." when evidence is insufficient', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ status: 'REGRESSION', deltaPercent: 50 })],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
+      correlation: {
+        metrics: {
+          exportMIDITime: {
+            regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 1500, deltaPercent: 50, pValue: 0.001, effectSize: 0.8, confidenceInterval: [1400, 1600] },
+            evidence: [],
+            likelyCause: null,
+            filteredEvidence: 2,
+          },
+        },
+        crossMetricCauses: [],
+        summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 0 },
+      },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('**Likely cause:** No likely cause identified.');
+  });
+
+  it('renders cross-metric shared causes instead of hiding them', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'REGRESSION', deltaPercent: 10.1 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'REGRESSION', deltaPercent: 159.4 }),
+      ],
+      summary: { pass: 0, warning: 0, regression: 2, failed: true },
+      correlation: {
+        metrics: {
+          saveTime: { regression: { metric: 'saveTime', baselineMedian: 26.7, currentMedian: 29.4, deltaPercent: 10.1, pValue: 0.001, effectSize: 0.8, confidenceInterval: [26, 32] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
+          exportMIDITime: { regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
         },
         crossMetricCauses: [
-          { description: 'Layout recalculation affects both LCP and FCP', source: 'Stage.ts:142', confidence: 'direct' as any, affectedMetrics: ['lcp', 'fcp'], evidenceIds: ['trace-1'] },
+          {
+            description: 'Git diff changes the metric\'s measured code path with a perf-sensitive change',
+            source: 'js/SaveInterface.js:42',
+            confidence: 'direct',
+            affectedMetrics: ['saveTime', 'exportMIDITime'],
+            evidenceIds: ['git-export'],
+          },
         ],
         summary: { totalRegressions: 2, metricsWithCause: 0, metricsInconclusive: 0 },
       },
     };
-    const comment = generatePRComment(resultWithCross);
-    expect(comment).toContain('Cross-Metric Causes');
-    expect(comment).toContain('Layout recalculation affects both LCP and FCP');
-  });
-});
-
-describe('formatValue', () => {
-  it('formats milliseconds with one decimal', () => {
-    expect(formatValue(1850, 'ms')).toBe('1850.0ms');
-  });
-
-  it('falls back to ms when unit is absent (backward compatible)', () => {
-    expect(formatValue(420)).toBe('420.0ms');
-  });
-
-  it('formats bytes without decimals', () => {
-    expect(formatValue(47400000, 'B')).toBe('47400000B');
-  });
-
-  it('formats counts without a unit suffix', () => {
-    expect(formatValue(15, '')).toBe('15');
-    expect(formatValue(15.5, '')).toBe('15.5');
-  });
-
-  it('formats blocks/s with blk/s suffix', () => {
-    expect(formatValue(12.345, 'blocks/s')).toBe('12.3blk/s');
-  });
-});
-
-describe('generatePRComment units', () => {
-  it('renders per-metric units instead of hardcoding ms', () => {
-    const result: CheckResult = {
-      results: [
-        { page: 'p', metric: 'blocksExecuted', status: 'PASS', deltaPercent: 0, baselineMedian: 15, currentMedian: 15, failThreshold: 25, unit: '' },
-        { page: 'p', metric: 'heapAfterBoot', status: 'PASS', deltaPercent: 0, baselineMedian: 47400000, currentMedian: 47400000, failThreshold: 30, unit: 'B' },
-        { page: 'p', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: -1, baselineMedian: 5540.9, currentMedian: 5483.6, failThreshold: 25, unit: 'ms' },
-      ],
-      summary: { pass: 3, warning: 0, regression: 0, failed: false },
-    };
-    const comment = generatePRComment(result);
-    expect(comment).toContain('| blocksExecuted | 15 | 15 |');
-    expect(comment).toContain('| heapAfterBoot | 47400000B | 47400000B |');
-    expect(comment).toContain('| bootstrapTotal | 5540.9ms | 5483.6ms |');
-    expect(comment).not.toContain('15.0ms');
+    const comment = generatePRComment(result, PR_27);
+    expect((comment.match(/js\/SaveInterface\.js:42/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(comment).toContain('shared across those metrics');
   });
 });

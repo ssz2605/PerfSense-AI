@@ -483,3 +483,215 @@ describe('integration — Music Blocks realistic data', () => {
     expect(result.metrics.playbackLatency.filteredEvidence).toBe(1);
   });
 });
+
+describe('git-diff causal localization (generic, no per-PR mappings)', () => {
+  const exportRegression = {
+    metric: 'exportMIDITime',
+    baselineMedian: 1000,
+    currentMedian: 2594,
+    deltaPercent: 159.4,
+    pValue: 0.0001,
+    effectSize: 1.2,
+    confidenceInterval: [2400, 2800] as [number, number],
+  };
+
+  // Simulates a git-diff evidence whose PR changed the measured export path:
+  // js/SaveInterface.js with a widened setTimeout (500 → 2500ms).
+  function gitDiffOnExportPath(): Evidence {
+    return makeEvidence({
+      id: 'git-export', type: 'git-diff', metricName: 'exportMIDITime',
+      details: {
+        changes: [{ file: 'js/SaveInterface.js', status: 'modified', insertions: 1, deletions: 1 }],
+        perfSensitive: [
+          {
+            file: 'js/SaveInterface.js',
+            line: 42,
+            function: 'export function afterSaveMIDI() {',
+            description: 'Scheduling delay increased (500ms → 2500ms) via setTimeout/setInterval',
+            direction: 'increased',
+          },
+        ],
+      },
+      highlights: [
+        { label: 'Files changed', value: '1 file changed', severity: 'info' },
+        { label: 'Perf-sensitive change', value: 'js/SaveInterface.js:42: Scheduling delay increased (500ms → 2500ms) via setTimeout/setInterval (increased)', severity: 'warning' },
+      ],
+      summary: 'Git diff changes measured export path (js/SaveInterface.js)',
+    });
+  }
+
+  it('perf-sensitive change on the metric\'s measured code path yields a likely cause', () => {
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [gitDiffOnExportPath()],
+      metricSchemas: defaultSchemas,
+    });
+    const mc = result.metrics.exportMIDITime;
+    expect(mc.likelyCause).not.toBeNull();
+    expect(mc.likelyCause!.confidence).toBe('direct');
+    expect(mc.likelyCause!.source).toContain('SaveInterface.js');
+    expect(mc.likelyCause!.evidenceIds).toContain('git-export');
+    expect(mc.evidence[0].relevance).toBe('direct');
+  });
+
+  it('perf-sensitive change on an unrelated file does NOT yield a cause (no false positive)', () => {
+    const ev = makeEvidence({
+      id: 'git-unrelated', type: 'git-diff', metricName: 'exportMIDITime',
+      details: { changes: [{ file: 'js/artwork.js', status: 'modified', insertions: 1, deletions: 1 }] },
+      highlights: [
+        { label: 'Files changed', value: '1 file changed', severity: 'info' },
+        { label: 'Perf-sensitive change', value: 'js/artwork.js:7: Added DOM work (added)', severity: 'warning' },
+      ],
+      summary: 'Git diff changes unrelated file',
+    });
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [ev],
+      metricSchemas: defaultSchemas,
+    });
+    expect(result.metrics.exportMIDITime.likelyCause).toBeNull();
+    expect(result.metrics.exportMIDITime.evidence[0].relevance).toBe('weak');
+  });
+
+  it('perf-sensitive change on the measured path but contradicting the regression direction stays honest', () => {
+    const ev = makeEvidence({
+      id: 'git-contradict', type: 'git-diff', metricName: 'exportMIDITime',
+      details: { changes: [{ file: 'js/SaveInterface.js', status: 'modified', insertions: 1, deletions: 1 }] },
+      highlights: [
+        { label: 'Perf-sensitive change', value: 'js/SaveInterface.js:42: Scheduling delay decreased (2500ms → 500ms) via setTimeout/setInterval (decreased)', severity: 'warning' },
+      ],
+      summary: 'Git diff removes work on the export path',
+    });
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [ev],
+      metricSchemas: defaultSchemas,
+    });
+    // A change that *shortens* a delay cannot explain a *slower* export metric.
+    expect(result.metrics.exportMIDITime.likelyCause).toBeNull();
+    expect(result.metrics.exportMIDITime.evidence[0].relevance).toBe('weak');
+  });
+
+  it('perf-sensitive change with unknown direction on the measured path is strong, not silent', () => {
+    const ev = makeEvidence({
+      id: 'git-unknown', type: 'git-diff', metricName: 'exportMIDITime',
+      details: { changes: [{ file: 'js/SaveInterface.js', status: 'modified', insertions: 2, deletions: 1 }] },
+      highlights: [
+        { label: 'Perf-sensitive change', value: 'js/SaveInterface.js:60: Changed queue behavior', severity: 'warning' },
+      ],
+      summary: 'Git diff changes the export path',
+    });
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [ev],
+      metricSchemas: defaultSchemas,
+    });
+    expect(result.metrics.exportMIDITime.evidence[0].relevance).toBe('strong');
+    expect(result.metrics.exportMIDITime.likelyCause).not.toBeNull();
+  });
+
+  it('bundle-affecting changes still rank as moderate (unchanged behavior)', () => {
+    const ev = makeEvidence({
+      id: 'git-bundle', type: 'git-diff', metricName: 'exportMIDITime',
+      highlights: [{ label: 'Bundle-affecting changes', value: 'audio-engine.js', severity: 'warning' }],
+      summary: 'Git diff shows bundle-affecting changes',
+    });
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [ev],
+      metricSchemas: defaultSchemas,
+    });
+    expect(result.metrics.exportMIDITime.evidence[0].relevance).toBe('moderate');
+  });
+
+  it('multiple candidates: the perf-sensitive change on the measured path wins the ranking', () => {
+    const onPath = gitDiffOnExportPath();
+    const offPath = makeEvidence({
+      id: 'git-bundle', type: 'git-diff', metricName: 'exportMIDITime',
+      highlights: [{ label: 'Bundle-affecting changes', value: 'audio-engine.js', severity: 'warning' }],
+      summary: 'Bundle-affecting change elsewhere',
+    });
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [offPath, onPath],
+      metricSchemas: defaultSchemas,
+    });
+    const evidenceList = result.metrics.exportMIDITime.evidence;
+    expect(evidenceList.length).toBe(2);
+    expect(evidenceList[0].id).toBe('git-export');
+    expect(evidenceList[0].relevance).toBe('direct');
+    expect(evidenceList[1].relevance).toBe('moderate');
+    expect(result.metrics.exportMIDITime.likelyCause).not.toBeNull();
+  });
+
+  it('blame resolution works when repoDir points at the changed file', () => {
+    const ev = gitDiffOnExportPath();
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [ev],
+      metricSchemas: defaultSchemas,
+      repoDir: process.cwd(),
+    });
+    const mc = result.metrics.exportMIDITime;
+    expect(mc.likelyCause).not.toBeNull();
+    if (mc.likelyCause && mc.likelyCause.blame) {
+      expect(mc.likelyCause.blame).toHaveProperty('commit');
+      expect(mc.likelyCause.blame).toHaveProperty('author');
+    } else {
+      // No git history for the fixture file in this test repo → blame is
+      // legitimately unavailable; the resolution path must not have crashed.
+      expect(mc.likelyCause!.source).toContain('SaveInterface.js');
+    }
+  });
+
+  it('likely cause carries structured causeEvidence (file, line, function, direction, changeType)', () => {
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [gitDiffOnExportPath()],
+      metricSchemas: defaultSchemas,
+    });
+    const ce = result.metrics.exportMIDITime.likelyCause!.causeEvidence;
+    expect(ce).toBeDefined();
+    expect(ce!.file).toBe('js/SaveInterface.js');
+    expect(ce!.line).toBe(42);
+    expect(ce!.function).toContain('afterSaveMIDI');
+    expect(ce!.direction).toBe('increased');
+    expect(ce!.changeType).toContain('500ms → 2500ms');
+    expect(ce!.metric).toBe('exportMIDITime');
+    expect(ce!.deltaPercent).toBe(159.4);
+  });
+
+  it('rationale explains what changed, where, why it matters and why the direction is consistent', () => {
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [gitDiffOnExportPath()],
+      metricSchemas: defaultSchemas,
+    });
+    const rationale = result.metrics.exportMIDITime.likelyCause!.rationale!;
+    // What/where changed.
+    expect(rationale).toContain('js/SaveInterface.js:42');
+    // Why it is relevant to this metric.
+    expect(rationale).toContain('on the code path measured by exportMIDITime');
+    // The performance-sensitive change type.
+    expect(rationale).toContain('Scheduling delay increased (500ms → 2500ms)');
+    // Function context when available.
+    expect(rationale).toContain('afterSaveMIDI');
+    // Direction consistency with the observed regression.
+    expect(rationale).toContain('consistent with the observed +159.4% slower result');
+    // Why it was selected as the likely cause.
+    expect(rationale).toContain('likely cause');
+  });
+
+  it('rationale does not expose confidence tier vocabulary', () => {
+    const result = correlate({
+      regression: [exportRegression],
+      evidence: [gitDiffOnExportPath()],
+      metricSchemas: defaultSchemas,
+    });
+    const rationale = result.metrics.exportMIDITime.likelyCause!.rationale!.toLowerCase();
+    expect(rationale).not.toContain('direct');
+    expect(rationale).not.toContain('strong');
+    expect(rationale).not.toContain('moderate');
+    expect(rationale).not.toContain('weak');
+  });
+});

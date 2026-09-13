@@ -4,27 +4,7 @@ import type { PageResult, BaselineData, BaselinePage, PerfSenseConfig, MetricChe
 import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
 import { correlate, type CorrelationInput, type CorrelationResult } from '@perfsense/correlation-engine';
-import { generatePRComment, type CheckResult, type CheckResultEntry } from '@perfsense/reporter-github';
-import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
-import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
-import type { MetricPlugin } from '@perfsense/core';
-
-/** Same registry the benchmark command resolves metrics from. */
-const PLUGIN_REGISTRY: Record<string, new () => MetricPlugin> = {
-  ...CORE_PLUGIN_REGISTRY,
-  ...MUSICBLOCKS_PLUGIN_REGISTRY
-};
-
-/** Display unit for a metric name; undefined when the metric is unknown. */
-function getMetricUnit(metric: string): string | undefined {
-  const Cls = PLUGIN_REGISTRY[metric.toLowerCase()];
-  if (!Cls) return undefined;
-  try {
-    return new Cls().meta.unit;
-  } catch {
-    return undefined;
-  }
-}
+import { generatePRComment, type CheckResult, type CheckResultEntry, type PRReportOptions } from '@perfsense/reporter-github';
 
 const DEFAULT_THRESHOLDS: Record<string, { warning: number; fail: number }> = {
   TTFB: { warning: 10, fail: 30 },
@@ -91,6 +71,7 @@ export async function run(argv: string[]): Promise<void> {
   let aiModel: string | undefined;
   let apiKey: string | undefined;
   let formatJson = false;
+  const reportOptions: PRReportOptions = {};
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--baseline' && i + 1 < argv.length) baselineFile = argv[++i];
@@ -102,6 +83,10 @@ export async function run(argv: string[]): Promise<void> {
     else if (argv[i] === '--ai-model' && i + 1 < argv.length) aiModel = argv[++i];
     else if (argv[i] === '--api-key' && i + 1 < argv.length) apiKey = argv[++i];
     else if (argv[i] === '--format' && i + 1 < argv.length) formatJson = argv[++i] === 'json';
+    else if (argv[i] === '--pr' && i + 1 < argv.length) reportOptions.pr = argv[++i];
+    else if (argv[i] === '--head' && i + 1 < argv.length) reportOptions.head = argv[++i];
+    else if (argv[i] === '--baseline-ref' && i + 1 < argv.length) reportOptions.baselineRef = argv[++i];
+    else if (argv[i] === '--matrix' && i + 1 < argv.length) reportOptions.matrix = argv[++i];
   }
 
   const baselinePath = path.resolve(baselineFile);
@@ -157,7 +142,7 @@ export async function run(argv: string[]): Promise<void> {
         else status = 'PASS';
       }
 
-      allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail, unit: getMetricUnit(metric) });
+      allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail });
       if (status === 'REGRESSION') hasRegression = true;
     }
   }
@@ -180,9 +165,22 @@ export async function run(argv: string[]): Promise<void> {
           confidenceInterval: [r.currentMedian * 0.9, r.currentMedian * 1.1] as [number, number],
         }));
 
+      // Include the PR diff as evidence so the engine can score whether any
+      // changed code plausibly caused the regression. The git diff is repo-wide,
+      // so it is collected once and the engine re-scores it for every metric.
+      const evidence: Evidence[] = [];
+      if (regressionEntries.length > 0) {
+        try {
+          const { collectGitDiffEvidence } = await import('@perfsense/evidence-git-diff');
+          evidence.push(collectGitDiffEvidence(regressionEntries[0].metric, repoDir));
+        } catch {
+          // Evidence collection is best-effort; correlation still runs without it.
+        }
+      }
+
       correlation = correlate({
         regression: regressionEntries,
-        evidence: [],
+        evidence,
         metricSchemas: {},
         sourceMapDir: sourceMapDir ? path.resolve(sourceMapDir) : undefined,
         repoDir: repoDir ? path.resolve(repoDir) : undefined,
@@ -228,7 +226,7 @@ export async function run(argv: string[]): Promise<void> {
   };
 
   // Generate PR comment
-  const comment = generatePRComment(checkResult, aiAnalysis);
+  const comment = generatePRComment(checkResult, { ...reportOptions, aiAnalysis });
 
   if (formatJson) {
     const report = {

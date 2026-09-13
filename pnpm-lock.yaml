@@ -28,6 +28,15 @@ importers:
         specifier: ^1.6.0
         version: 1.6.1(@types/node@20.19.43)
 
+  packages/benchmark-matrix:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      vitest:
+        specifier: ^1.6.0
+        version: 1.6.1(@types/node@20.19.43)
+
   packages/cli:
     dependencies:
       '@perfsense/ai-provider':
@@ -221,6 +230,9 @@ importers:
 
   packages/reporter-github:
     dependencies:
+      '@perfsense/benchmark-matrix':
+        specifier: workspace:*
+        version: link:../benchmark-matrix
       '@perfsense/core':
         specifier: workspace:*
         version: link:../core

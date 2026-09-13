@@ -82,11 +82,16 @@ describe("GitHub Action E2E", () => {
         { cwd: workDir, encoding: "utf-8", timeout: 30000 },
       );
 
-      // Assert output contains PR comment structure
-      expect(reportOutput).toContain("PerfSense AI");
-      expect(reportOutput).toContain("Summary");
-      expect(reportOutput).toContain("Baseline");
-      expect(reportOutput).toContain("Current");
+      // Assert output contains PR comment structure.
+      // The synthetic e2e page is not part of the approved Music Blocks
+      // Benchmark Matrix, so the contract-filtered report renders the summary
+      // sections without leaking its raw metrics.
+      expect(reportOutput).toContain("PerfSense Performance Report");
+      expect(reportOutput).toContain("Performance Summary");
+      expect(reportOutput).toContain("No benchmark results match the approved Benchmark Matrix.");
+      expect(reportOutput).toContain("Performance Regressions");
+      expect(reportOutput).toContain("No performance regressions detected.");
+      expect(reportOutput).toContain("Artifacts");
 
       // Step 5: Test cache command
       const cacheOutput = execSync(
