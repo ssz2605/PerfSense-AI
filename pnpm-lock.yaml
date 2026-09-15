@@ -42,6 +42,9 @@ importers:
       '@perfsense/ai-provider':
         specifier: workspace:*
         version: link:../ai-provider
+      '@perfsense/benchmark-matrix':
+        specifier: workspace:*
+        version: link:../benchmark-matrix
       '@perfsense/core':
         specifier: workspace:*
         version: link:../core
@@ -107,6 +110,9 @@ importers:
 
   packages/driver-playwright:
     dependencies:
+      '@perfsense/benchmark-matrix':
+        specifier: workspace:*
+        version: link:../benchmark-matrix
       '@perfsense/core':
         specifier: workspace:*
         version: link:../core

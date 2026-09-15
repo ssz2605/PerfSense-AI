@@ -23,6 +23,12 @@ export interface FixtureContract {
    * performance regressions.
    */
   unverified?: string[];
+  /**
+   * Warn-only metrics. They are analyzed and shown, but their status is capped
+   * at warning: they can never post REGRESSION. Initial rollout for metrics
+   * whose CI variance is not yet characterized.
+   */
+  warnOnly?: string[];
 }
 
 export const BENCHMARK_MATRIX: FixtureContract[] = [
@@ -48,18 +54,21 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     displayName: 'index.html (bootstrap)',
     metrics: ['bootstrapTotal', 'initTotal', 'heapAfterBoot'],
     unverified: [],
+    warnOnly: [],
   },
   {
     fixture: 'RainbowConnection.html',
     displayName: 'Rainbow Connection',
     metrics: ['projectLoadTime', 'saveTime', 'exportMIDITime', 'memoryDelta', 'retainedHeap'],
     unverified: [],
+    warnOnly: ['memoryDelta', 'retainedHeap'],
   },
   {
     fixture: 'Frere-Jacques.html',
     displayName: 'Frère Jacques',
     metrics: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError'],
     unverified: [],
+    warnOnly: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError'],
   },
   {
     fixture: 'musical-tree.html',
@@ -68,18 +77,21 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // maxDepth is suspected to measure runFromBlockNow() nesting rather than
     // logical action recursion and is currently sanity/unverified.
     unverified: ['maxDepth'],
+    warnOnly: ['memoryDelta', 'retainedHeap'],
   },
   {
     fixture: 'ascending-notes-color-spiral.html',
     displayName: 'ascending-notes-color-spiral',
     metrics: ['executionTime', 'maxDepth', 'blocksExecuted'],
     unverified: ['maxDepth'],
+    warnOnly: [],
   },
   {
     fixture: 'crabcanon-plot.html',
     displayName: 'crabcanon-plot',
     metrics: ['scheduleLagMean', 'scheduleLagMax'],
     unverified: [],
+    warnOnly: [],
   },
 ];
 
@@ -136,6 +148,17 @@ export function isMetricUnverified(fixture: string, metric: string): boolean {
   if (!contract) return false;
   const key = metric.toLowerCase();
   return (contract.unverified ?? []).some((m) => m.toLowerCase() === key);
+}
+
+/**
+ * True when the metric is approved but warn-only: analyzed and shown, yet
+ * capped at WARNING so it can never post REGRESSION.
+ */
+export function isMetricWarnOnly(fixture: string, metric: string): boolean {
+  const contract = getFixtureContract(fixture);
+  if (!contract) return false;
+  const key = metric.toLowerCase();
+  return (contract.warnOnly ?? []).some((m) => m.toLowerCase() === key);
 }
 
 /** Human-friendly fixture heading (falls back to the raw fixture key). */

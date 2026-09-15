@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@perfsense/benchmark-matrix": "workspace:*",
     "@perfsense/core": "workspace:*",
     "@perfsense/metrics-core": "workspace:*",
     "@perfsense/metrics-musicblocks": "workspace:*",

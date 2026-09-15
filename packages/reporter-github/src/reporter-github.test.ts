@@ -40,6 +40,21 @@ function makeCause(partial?: Partial<LikelyCause>): LikelyCause {
   };
 }
 
+function makeCorrelation(metric = 'exportMIDITime', cause: LikelyCause | null = makeCause()): CheckResult['correlation'] {
+  return {
+    metrics: {
+      [metric]: {
+        regression: { metric, baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] },
+        evidence: [],
+        likelyCause: cause,
+        filteredEvidence: 0,
+      },
+    },
+    crossMetricCauses: [],
+    summary: { totalRegressions: 1, metricsWithCause: cause ? 1 : 0, metricsInconclusive: 0 },
+  };
+}
+
 describe('matrix filtering', () => {
   it('shows only Benchmark Matrix fixture/metric combinations', () => {
     const result: CheckResult = {
@@ -65,7 +80,7 @@ describe('matrix filtering', () => {
     expect(comment).not.toContain('retainedHeap');
   });
 
-  it('keeps metrics associated with their fixture (no global grouping)', () => {
+  it('groups every fixture row in the summary and metrics under their fixture', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'PASS', deltaPercent: 0, baselineMedian: 8959, currentMedian: 8959 }),
@@ -74,37 +89,24 @@ describe('matrix filtering', () => {
       summary: { pass: 2, warning: 0, regression: 0, failed: false },
     };
     const comment = generatePRComment(result, PR_27);
-    // Rainbow Connection section contains projectLoadTime.
-    const rainbowIdx = comment.indexOf('### Rainbow Connection');
-    const projectIdx = comment.indexOf('projectLoadTime');
-    const emptyIdx = comment.indexOf('### index.html (bootstrap)');
-    expect(rainbowIdx).toBeGreaterThan(-1);
-    expect(emptyIdx).toBeGreaterThan(rainbowIdx);
-    expect(projectIdx).toBeGreaterThan(rainbowIdx);
+    // Summary lists both fixtures (matrix order: index.html first).
+    const indexSummary = comment.indexOf('| index.html (bootstrap) | ✅ Passed |');
+    const rainbowSummary = comment.indexOf('| Rainbow Connection | ✅ Passed |');
+    expect(indexSummary).toBeGreaterThan(-1);
+    expect(rainbowSummary).toBeGreaterThan(indexSummary);
+    // Metrics stay under their own fixture in the collapsible table.
+    const collapsible = comment.split('<summary>All approved metrics</summary>')[1];
+    const indexSection = collapsible.split('### index.html (bootstrap)')[1].split('###')[0];
+    expect(indexSection).toContain('bootstrapTotal');
+    const rainbowSection = collapsible.split('### Rainbow Connection')[1].split('###')[0];
+    expect(rainbowSection).toContain('projectLoadTime');
+    expect(indexSection).not.toContain('projectLoadTime');
+    expect(rainbowSection).not.toContain('bootstrapTotal');
   });
 });
 
-describe('professional grouping and statuses', () => {
-  it('renders each fixture once as a section with grouped metrics', () => {
-    const result: CheckResult = {
-      results: [
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
-        makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'PASS', deltaPercent: -1 }),
-        makeEntry({ page: 'RainbowConnection.html', metric: 'memoryDelta', status: 'PASS', deltaPercent: 0 }),
-        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 }),
-      ],
-      summary: { pass: 4, warning: 0, regression: 0, failed: false },
-    };
-    const comment = generatePRComment(result, PR_27);
-    expect(comment.match(/### Rainbow Connection/g)).toHaveLength(1);
-    expect(comment.match(/### index\.html \(bootstrap\)/g)).toHaveLength(1);
-    const rainbow = comment.split('### index.html (bootstrap)')[0];
-    expect(rainbow).toContain('exportMIDITime');
-    expect(rainbow).toContain('saveTime');
-    expect(rainbow).toContain('memoryDelta');
-  });
-
-  it('uses professional text statuses, not emojis or icons', () => {
+describe('summary statuses and compact details', () => {
+  it('uses emoji indicators in the overall line and summary rows, text statuses in tables', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
@@ -115,17 +117,45 @@ describe('professional grouping and statuses', () => {
       summary: { pass: 2, warning: 1, regression: 1, failed: true },
     };
     const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('🔴 Performance regression detected');
+    expect(comment).toContain('| Rainbow Connection | 🔴 Regression |');
+    // The full table still uses professional words.
     expect(comment).toContain('| Passed |');
     expect(comment).toContain('| Warning |');
     expect(comment).toContain('| Regression |');
     expect(comment).toContain('| Improved |');
-    expect(comment).not.toContain(':x:');
-    expect(comment).not.toContain(':warning:');
-    expect(comment).not.toContain(':white_check_mark:');
-    expect(comment).not.toContain('✅');
-    expect(comment).not.toContain('❌');
-    expect(comment).not.toContain('⚠');
-    expect(comment).not.toContain('🚀');
+  });
+
+  it('reports a warning-only run as no significant regression', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMean', status: 'WARNING', deltaPercent: 42, baselineMedian: 40, currentMedian: 56.8 }),
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'cumulativeDrift', status: 'WARNING', deltaPercent: 18, baselineMedian: 1, currentMedian: 1.18 }),
+      ],
+      summary: { pass: 0, warning: 2, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('🟡 No significant regression');
+    expect(comment).toContain('| Frère Jacques | 🟡 Warning |');
+    // Warnings are surfaced in the summary but not as detail blocks.
+    expect(comment).toContain('No regressions or meaningful improvements detected.');
+  });
+
+  it('renders only notable fixtures in Details and passes through to the collapsible table', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 }),
+      ],
+      summary: { pass: 2, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    const details = comment.split('## Details')[1].split('<details>')[0];
+    expect(details).not.toContain('### Rainbow Connection');
+    expect(details).toContain('No regressions or meaningful improvements detected.');
+    // Both fixtures still appear in the collapsible section.
+    expect(comment).toContain('### Rainbow Connection');
+    expect(comment).toContain('### index.html (bootstrap)');
   });
 
   it('marks maxDepth as Unverified and excludes it from regressions', () => {
@@ -138,8 +168,21 @@ describe('professional grouping and statuses', () => {
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).toContain('| maxDepth | 1 | 3 | +200.0% | Unverified |');
-    // Not treated as a genuine regression: absent from the regressions section.
+    // Not treated as a genuine regression: no detail block, no red overall.
     expect(comment).not.toContain('### maxDepth');
+    expect(comment).toContain('🟢 No significant regression');
+  });
+
+  it('shows meaningful improvements as green detail blocks', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'ascending-notes-color-spiral.html', metric: 'executionTime', status: 'PASS', deltaPercent: -12.3, baselineMedian: 743, currentMedian: 651.6 }),
+      ],
+      summary: { pass: 1, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('| ascending-notes-color-spiral | 🟢 Improved |');
+    expect(comment).toContain('🟢 **executionTime** — -12.3%');
   });
 });
 
@@ -155,13 +198,15 @@ describe('report structure', () => {
     expect(comment).toContain('Head: c46d920');
     expect(comment).toContain('Baseline: origin/master');
     expect(comment).toContain('Matrix: Music Blocks Benchmark Matrix');
-    const summaryIdx = comment.indexOf('## Performance Summary');
-    const regressionsIdx = comment.indexOf('## Performance Regressions');
+    const checkIdx = comment.indexOf('## Performance Check');
+    const detailsIdx = comment.indexOf('## Details');
+    const fullIdx = comment.indexOf('<details>');
     const artifactsIdx = comment.indexOf('## Artifacts');
-    expect(summaryIdx).toBeGreaterThan(-1);
-    expect(regressionsIdx).toBeGreaterThan(summaryIdx);
-    expect(artifactsIdx).toBeGreaterThan(regressionsIdx);
-    expect(comment).toContain('No performance regressions detected.');
+    expect(checkIdx).toBeGreaterThan(-1);
+    expect(detailsIdx).toBeGreaterThan(checkIdx);
+    expect(fullIdx).toBeGreaterThan(detailsIdx);
+    expect(artifactsIdx).toBeGreaterThan(fullIdx);
+    expect(comment).toContain('🟢 No significant regression');
     expect(comment).toContain('- [Full results JSON](./perfsense-results.json)');
   });
 
@@ -169,18 +214,7 @@ describe('report structure', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: {
-        metrics: {
-          exportMIDITime: {
-            regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] },
-            evidence: [],
-            likelyCause: makeCause(),
-            filteredEvidence: 0,
-          },
-        },
-        crossMetricCauses: [],
-        summary: { totalRegressions: 1, metricsWithCause: 1, metricsInconclusive: 0 },
-      },
+      correlation: makeCorrelation(),
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).not.toContain('direct');
@@ -197,21 +231,10 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4, baselineMedian: 1678.6, currentMedian: 4354.2 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: {
-        metrics: {
-          exportMIDITime: {
-            regression: { metric: 'exportMIDITime', baselineMedian: 1678.6, currentMedian: 4354.2, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [4000, 4700] },
-            evidence: [],
-            likelyCause: makeCause(),
-            filteredEvidence: 0,
-          },
-        },
-        crossMetricCauses: [],
-        summary: { totalRegressions: 1, metricsWithCause: 1, metricsInconclusive: 0 },
-      },
+      correlation: makeCorrelation('exportMIDITime', makeCause()),
     };
     const comment = generatePRComment(result, PR_27);
-    expect(comment).toContain('### exportMIDITime — +159.4%');
+    expect(comment).toContain('🔴 **exportMIDITime** — +159.4%');
     expect(comment).toContain('**Likely cause:** `js/SaveInterface.js:42`');
     expect(comment).toContain('**Function:** afterSaveMIDI()');
     expect(comment).toContain('**AI analysis:**');
@@ -224,18 +247,7 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 50 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: {
-        metrics: {
-          exportMIDITime: {
-            regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 1500, deltaPercent: 50, pValue: 0.001, effectSize: 0.8, confidenceInterval: [1400, 1600] },
-            evidence: [],
-            likelyCause: null,
-            filteredEvidence: 2,
-          },
-        },
-        crossMetricCauses: [],
-        summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 0 },
-      },
+      correlation: makeCorrelation('exportMIDITime', null),
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).toContain('**Likely cause:** No likely cause identified.');

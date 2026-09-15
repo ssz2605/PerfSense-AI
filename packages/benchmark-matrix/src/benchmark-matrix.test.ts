@@ -6,6 +6,7 @@ import {
   isKnownFixture,
   isMetricApproved,
   isMetricUnverified,
+  isMetricWarnOnly,
   formatFixtureName,
   formatMetricValue,
   formatDeltaPercent,
@@ -60,6 +61,45 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricUnverified('ascending-notes-color-spiral.html', 'maxDepth')).toBe(true);
     expect(isMetricUnverified('musical-tree.html', 'maxQueueDepth')).toBe(false);
     expect(isMetricUnverified('RainbowConnection.html', 'exportMIDITime')).toBe(false);
+  });
+
+  it('marks the warn-only metrics per fixture', () => {
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'callbackLatencyMean')).toBe(true);
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'callbackLatencyMax')).toBe(true);
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'cumulativeDrift')).toBe(true);
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'voiceOnsetError')).toBe(true);
+    expect(isMetricWarnOnly('RainbowConnection.html', 'memoryDelta')).toBe(true);
+    expect(isMetricWarnOnly('RainbowConnection.html', 'retainedHeap')).toBe(true);
+    expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(true);
+    expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(true);
+    // Verified metrics are not warn-only, and neither is scheduleLag.
+    expect(isMetricWarnOnly('index.html', 'bootstrapTotal')).toBe(false);
+    expect(isMetricWarnOnly('RainbowConnection.html', 'projectLoadTime')).toBe(false);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMean')).toBe(false);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMax')).toBe(false);
+    // A metric listed only in another fixture's set is not simply warn-only:
+    // it is not approved at all for this fixture.
+    expect(isMetricApproved('index.html', 'memoryDelta')).toBe(false);
+  });
+
+  it('rejects every metric outside its fixture list (strict contract)', () => {
+    // No metric may appear outside its approved list: the full registry of
+    // metrics must be rejected for fixtures that do not list them.
+    const allMetrics = [
+      'bootstrapTotal', 'initTotal', 'heapAfterBoot',
+      'projectLoadTime', 'saveTime', 'exportMIDITime',
+      'callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError',
+      'maxQueueDepth', 'executionTime', 'blocksExecuted', 'maxDepth',
+      'memoryDelta', 'retainedHeap', 'scheduleLagMean', 'scheduleLagMax',
+    ];
+    for (const contract of BENCHMARK_MATRIX) {
+      for (const metric of allMetrics) {
+        const approved = contract.metrics.some((m) => m.toLowerCase() === metric.toLowerCase());
+        expect(isMetricApproved(contract.fixture, metric)).toBe(approved);
+      }
+    }
+    // maxActionDepth is not part of the contract anywhere.
+    expect(isMetricApproved('musical-tree.html', 'maxActionDepth')).toBe(false);
   });
 
   it('formats display names and values professionally', () => {

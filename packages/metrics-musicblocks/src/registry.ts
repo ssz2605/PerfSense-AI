@@ -10,7 +10,6 @@ import { CumulativeDrift } from './cumulativeDrift';
 import { VoiceOnsetError } from './voiceOnsetError';
 import { ExecutionTime } from './executionTime';
 import { MaxQueueDepth } from './maxQueueDepth';
-import { MaxActionDepth } from './maxActionDepth';
 import { BlocksExecuted } from './blocksExecuted';
 import { MaxDepth } from './maxDepth';
 import { HeapAfterBoot } from './heapAfterBoot';
@@ -20,6 +19,8 @@ import { SaveTime } from './saveTime';
 import { ExportMIDITime } from './exportMIDITime';
 import { BootstrapTotal } from './bootstrapTotal';
 import { InitTotal } from './initTotal';
+import { ScheduleLagMean } from './scheduleLagMean';
+import { ScheduleLagMax } from './scheduleLagMax';
 
 /**
  * Every music-blocks seam metric, keyed by lowercase name so lookups are
@@ -38,7 +39,6 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   voiceonseterror: VoiceOnsetError,
   executiontime: ExecutionTime,
   maxqueuedepth: MaxQueueDepth,
-  maxactiondepth: MaxActionDepth,
   blocksexecuted: BlocksExecuted,
   maxdepth: MaxDepth,
   heapafterboot: HeapAfterBoot,
@@ -47,5 +47,7 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   savetime: SaveTime,
   exportmiditime: ExportMIDITime,
   bootstraptotal: BootstrapTotal,
-  inittotal: InitTotal
+  inittotal: InitTotal,
+  schedulelagmean: ScheduleLagMean,
+  schedulelagmax: ScheduleLagMax
 };

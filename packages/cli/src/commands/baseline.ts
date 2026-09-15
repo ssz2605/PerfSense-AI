@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import type { PageResult, BaselineData } from '@perfsense/core';
 import { median, percentile } from '@perfsense/statistics';
+import { isKnownFixture, isMetricApproved } from '@perfsense/benchmark-matrix';
 
 function printUsage(): void {
   console.log(
@@ -24,7 +25,7 @@ function getMetricNames(runs: PageResult['runs']): string[] {
 function collectValues(runs: PageResult['runs'], metric: string): number[] {
   return runs
     .map((r) => r.metrics[metric])
-    .filter((v): v is number => v !== null);
+    .filter((v): v is number => typeof v === 'number');
 }
 
 export function save(argv: string[]): void {
@@ -51,7 +52,18 @@ export function save(argv: string[]): void {
   const pages: BaselineData['pages'] = {};
 
   for (const pageResult of results) {
-    const metricNames = getMetricNames(pageResult.runs);
+    // The Benchmark Matrix is the source of truth. Fixtures outside the matrix
+    // and metric/fixture combinations it does not approve are rejected at
+    // baseline-save time so stale or unauthorized entries never enter the
+    // committed baseline.
+    if (!isKnownFixture(pageResult.page)) {
+      console.warn(`Skipping page "${pageResult.page}": not in Benchmark Matrix`);
+      continue;
+    }
+
+    const metricNames = getMetricNames(pageResult.runs).filter((m) =>
+      isMetricApproved(pageResult.page, m),
+    );
     const pageMetrics: Record<string, { median: number; p10: number; p90: number; values: number[] }> = {};
 
     for (const metric of metricNames) {

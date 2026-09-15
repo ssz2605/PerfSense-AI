@@ -60,6 +60,12 @@ export interface BaselineData {
 export interface ThresholdLevel {
   warning: number;
   fail: number;
+  /**
+   * Optional ceiling status applied after classification: 'warning' caps
+   * REGRESSION at WARNING, 'pass' caps everything at PASS. Used for metrics
+   * whose probes are warn-only until their variance is characterized.
+   */
+  maxStatus?: 'pass' | 'warning';
 }
 
 export interface PerfSenseConfig {

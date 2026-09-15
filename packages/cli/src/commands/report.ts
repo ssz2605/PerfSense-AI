@@ -1,12 +1,13 @@
 import path from 'path';
 import fs from 'fs';
-import type { PageResult, BaselineData, BaselinePage, PerfSenseConfig, MetricCheckResult, CheckStatus, Evidence } from '@perfsense/core';
+import type { PageResult, BaselineData, BaselinePage, PerfSenseConfig, MetricCheckResult, CheckStatus, Evidence, ThresholdLevel } from '@perfsense/core';
 import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
 import { correlate, type CorrelationInput, type CorrelationResult } from '@perfsense/correlation-engine';
+import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { generatePRComment, type CheckResult, type CheckResultEntry, type PRReportOptions } from '@perfsense/reporter-github';
 
-const DEFAULT_THRESHOLDS: Record<string, { warning: number; fail: number }> = {
+const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
   FCP: { warning: 5, fail: 10 },
   LCP: { warning: 5, fail: 10 },
@@ -25,7 +26,7 @@ function loadConfig(configPath?: string): PerfSenseConfig | null {
   return null;
 }
 
-function getThreshold(metric: string, config: PerfSenseConfig | null): { warning: number; fail: number } {
+function getThreshold(metric: string, config: PerfSenseConfig | null): ThresholdLevel {
   if (config?.thresholds?.[metric]) return config.thresholds[metric];
   if (DEFAULT_THRESHOLDS[metric]) return DEFAULT_THRESHOLDS[metric];
   return { warning: 10, fail: 20 };
@@ -42,8 +43,18 @@ function mapStatus(s: ClassificationResult['status']): CheckStatus {
   return 'PASS';
 }
 
+/** Applies a maxStatus ceiling to the delta-only verdict path. */
+function clampStatus(
+  status: CheckStatus,
+  maxStatus: 'pass' | 'warning' | undefined,
+): CheckStatus {
+  if (maxStatus === 'warning' && status === 'REGRESSION') return 'WARNING';
+  if (maxStatus === 'pass' && status !== 'PASS') return 'PASS';
+  return status;
+}
+
 function collectCurrentValues(pageResult: PageResult, metric: string): number[] {
-  return pageResult.runs.map((r) => r.metrics[metric]).filter((v): v is number => v !== null);
+  return pageResult.runs.map((r) => r.metrics[metric]).filter((v): v is number => typeof v === 'number');
 }
 
 function collectBaselineValues(baselinePage: BaselinePage, metric: string): number[] | null {
@@ -104,12 +115,20 @@ export async function run(argv: string[]): Promise<void> {
   for (const pageResult of current) {
     const pageName = pageResult.page;
     const baselinePage: BaselinePage | undefined = baseline.pages[pageName];
+    if (!isKnownFixture(pageName)) {
+      process.stderr.write(`Warning: page "${pageName}" not in Benchmark Matrix, skipping\n`);
+      continue;
+    }
     if (!baselinePage) {
       process.stderr.write(`Warning: no baseline data for page "${pageName}", skipping\n`);
       continue;
     }
     const metricNames = getMetricNames(pageResult.runs);
     for (const metric of metricNames) {
+      if (!isMetricApproved(pageName, metric)) {
+        process.stderr.write(`Warning: ${pageName}/${metric} not approved by Benchmark Matrix, skipping\n`);
+        continue;
+      }
       const currentValues = collectCurrentValues(pageResult, metric);
       if (currentValues.length === 0) {
         process.stderr.write(`Warning: no valid values for ${pageName}/${metric}, skipping\n`);
@@ -124,6 +143,10 @@ export async function run(argv: string[]): Promise<void> {
       const baselineMedian = baselineStats.median;
       const deltaPercent = computeDeltaPercent(baselineMedian, currentMedian);
       const threshold = getThreshold(metric, config);
+      // Warn-only metrics can never post REGRESSION; a config maxStatus may
+      // cap others (memory, drift) at warning too.
+      const effectiveMaxStatus: 'pass' | 'warning' | undefined =
+        isMetricWarnOnly(pageName, metric) ? 'warning' : threshold.maxStatus;
 
       const baselineValues = collectBaselineValues(baselinePage, metric);
       let status: CheckStatus;
@@ -131,15 +154,20 @@ export async function run(argv: string[]): Promise<void> {
       let effectSize: number | null = null;
       let confidenceInterval: [number, number] | null = null;
       if (baselineValues && baselineValues.length > 0) {
-        const result = classifyRegression(baselineValues, currentValues, threshold);
+        const result = classifyRegression(baselineValues, currentValues, {
+          ...threshold,
+          maxStatus: effectiveMaxStatus,
+        });
         status = mapStatus(result.status);
         pValue = result.pValue;
         effectSize = result.effectSize;
         confidenceInterval = result.confidenceInterval;
       } else {
-        if (deltaPercent >= threshold.fail) status = 'REGRESSION';
-        else if (deltaPercent >= threshold.warning) status = 'WARNING';
-        else status = 'PASS';
+        let raw: CheckStatus;
+        if (deltaPercent >= threshold.fail) raw = 'REGRESSION';
+        else if (deltaPercent >= threshold.warning) raw = 'WARNING';
+        else raw = 'PASS';
+        status = clampStatus(raw, effectiveMaxStatus);
       }
 
       allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail });

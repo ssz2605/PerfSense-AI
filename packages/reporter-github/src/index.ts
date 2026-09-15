@@ -1,10 +1,10 @@
 import type { CheckStatus } from '@perfsense/core';
 import type { CorrelationResult, LikelyCause } from '@perfsense/correlation-engine';
 import {
+  BENCHMARK_MATRIX,
   formatDeltaPercent,
   formatFixtureName,
   formatMetricValue,
-  getApprovedMetrics,
   isMetricApproved,
   isMetricUnverified,
   isKnownFixture,
@@ -45,7 +45,7 @@ export interface PRReportOptions {
   aiAnalysis?: string;
 }
 
-/** Professional status words used in the report (no emojis/decorative marks). */
+/** Professional status words used in the full metrics table (no emojis). */
 export function statusWord(status: CheckStatus, deltaPercent: number): string {
   if (status === 'REGRESSION') return 'Regression';
   if (status === 'WARNING') return 'Warning';
@@ -80,7 +80,7 @@ function formatSource(c: { source: string; sourceLocation?: { originalFile: stri
     : c.source;
 }
 
-/** Renders a fixture's summary table, filtering to approved matrix metrics. */
+/** Renders a fixture's full metric table (used in the collapsible section). */
 function fixtureTable(entries: CheckResultEntry[]): string[] {
   const lines: string[] = [];
   lines.push('| Metric | Baseline | Current | Delta | Status |');
@@ -97,13 +97,13 @@ function fixtureTable(entries: CheckResultEntry[]): string[] {
   return lines;
 }
 
-function regressionBlock(
+/** Cause + AI analysis lines for a regression/warning detail block. */
+function causeLines(
   entry: CheckResultEntry,
   correlation: CorrelationResult | undefined,
 ): string[] {
   const lines: string[] = [];
-  const headingDelta = `${entry.deltaPercent >= 0 ? '+' : ''}${entry.deltaPercent.toFixed(1)}%`;
-  lines.push(`### ${entry.metric} — ${headingDelta}`);
+  lines.push(`Baseline: ${formatMetricValue(entry.baselineMedian, entry.metric)} | Current: ${formatMetricValue(entry.currentMedian, entry.metric)}`);
   lines.push('');
 
   const { lc } = findCorrelation(correlation, entry.metric);
@@ -136,6 +136,68 @@ function regressionBlock(
   return lines;
 }
 
+interface FixtureView {
+  fixture: string;
+  displayName: string;
+  entries: CheckResultEntry[];
+}
+
+/** Groups approved entries per fixture, in Benchmark Matrix order. */
+function groupByFixture(result: CheckResult): FixtureView[] {
+  const byFixture = new Map<string, CheckResultEntry[]>();
+  for (const r of result.results) {
+    if (!isKnownFixture(r.page)) continue;
+    if (!isMetricApproved(r.page, r.metric)) continue;
+    const list = byFixture.get(r.page) ?? [];
+    list.push(r);
+    byFixture.set(r.page, list);
+  }
+  const views: FixtureView[] = [];
+  for (const contract of BENCHMARK_MATRIX) {
+    const entries = byFixture.get(contract.fixture);
+    if (entries && entries.length > 0) {
+      views.push({ fixture: contract.fixture, displayName: contract.displayName, entries });
+    }
+  }
+  return views;
+}
+
+/** Verified (non-unverified) entries of a fixture. */
+function verifiedEntries(view: FixtureView): CheckResultEntry[] {
+  return view.entries.filter((e) => !isMetricUnverified(view.fixture, e.metric));
+}
+
+/** True when the improvement is large enough to be reportable. */
+function isMeaningfulImprovement(entry: CheckResultEntry): boolean {
+  return entry.status === 'PASS' && entry.deltaPercent <= -10;
+}
+
+interface FixtureSummaryStatus {
+  icon: string;
+  label: string;
+}
+
+function fixtureSummaryStatus(view: FixtureView): FixtureSummaryStatus {
+  const verified = verifiedEntries(view);
+  if (verified.some((e) => e.status === 'REGRESSION')) return { icon: '🔴', label: 'Regression' };
+  if (verified.some((e) => e.status === 'WARNING')) return { icon: '🟡', label: 'Warning' };
+  if (verified.some(isMeaningfulImprovement)) return { icon: '🟢', label: 'Improved' };
+  return { icon: '✅', label: 'Passed' };
+}
+
+/** Detail block heading + numbers + cause for one notable metric. */
+function detailBlock(
+  entry: CheckResultEntry,
+  correlation: CorrelationResult | undefined,
+  icon: string,
+): string[] {
+  const lines: string[] = [];
+  lines.push(`${icon} **${entry.metric}** — ${formatDeltaPercent(entry.deltaPercent)}`);
+  lines.push('');
+  lines.push(...causeLines(entry, correlation));
+  return lines;
+}
+
 export function generatePRComment(
   result: CheckResult,
   options: PRReportOptions = {},
@@ -150,44 +212,86 @@ export function generatePRComment(
   if (options.matrix) lines.push(`Matrix: ${options.matrix}`);
   if (options.pr || options.head || options.baselineRef || options.matrix) lines.push('');
 
-  // ── Performance Summary ──────────────────────────────────────────────
-  const grouped: Map<string, CheckResultEntry[]> = new Map();
-  for (const r of result.results) {
-    if (!isKnownFixture(r.page)) continue;
-    if (!isMetricApproved(r.page, r.metric)) continue;
-    const list = grouped.get(r.page) ?? [];
-    list.push(r);
-    grouped.set(r.page, list);
-  }
+  const views = groupByFixture(result);
 
-  lines.push('## Performance Summary');
+  const verified = views.flatMap((v) => verifiedEntries(v));
+  const regressions = verified.filter((e) => e.status === 'REGRESSION');
+  const warnings = verified.filter((e) => e.status === 'WARNING');
+
+  // ── Performance Check (overall status + fixture summary) ─────────────
+  lines.push('## Performance Check');
   lines.push('');
-  for (const [fixture, entries] of grouped) {
-    lines.push(`### ${formatFixtureName(fixture)}`);
+  if (regressions.length > 0) {
+    lines.push('🔴 Performance regression detected');
     lines.push('');
-    lines.push(...fixtureTable(entries));
+    lines.push(
+      `${regressions.length} regression(s) and ${warnings.length} warning(s) across approved metrics.`,
+    );
+  } else if (warnings.length > 0) {
+    lines.push('🟡 No significant regression');
+    lines.push('');
+    lines.push(
+      `${warnings.length} warning(s) across approved metrics — no metric exceeded its regression threshold.`,
+    );
+  } else {
+    lines.push('🟢 No significant regression');
+  }
+  lines.push('');
+
+  lines.push('### Fixture summary');
+  lines.push('');
+  lines.push('| Fixture | Result |');
+  lines.push('|---|---|');
+  for (const view of views) {
+    const s = fixtureSummaryStatus(view);
+    lines.push(`| ${view.displayName} | ${s.icon} ${s.label} |`);
+  }
+  if (views.length === 0) {
+    lines.push('| (no approved benchmark results) | — |');
+  }
+  lines.push('');
+
+  // ── Details: notable regressions/improvements per fixture ────────────
+  lines.push('## Details');
+  lines.push('');
+  let anyNotable = false;
+  for (const view of views) {
+    const notable = verifiedEntries(view).filter(
+      (e) => e.status === 'REGRESSION' || isMeaningfulImprovement(e),
+    );
+    if (notable.length === 0) continue;
+    anyNotable = true;
+    lines.push(`### ${view.displayName}`);
+    lines.push('');
+    for (const entry of notable) {
+      if (entry.status === 'REGRESSION') {
+        lines.push(...detailBlock(entry, result.correlation, '🔴'));
+      } else {
+        lines.push(...detailBlock(entry, result.correlation, '🟢'));
+      }
+    }
+  }
+  if (!anyNotable) {
+    lines.push('No regressions or meaningful improvements detected.');
     lines.push('');
   }
 
-  if (grouped.size === 0) {
+  // ── Full approved metrics (collapsible) ──────────────────────────────
+  lines.push('<details>');
+  lines.push('<summary>All approved metrics</summary>');
+  lines.push('');
+  for (const view of views) {
+    lines.push(`### ${view.displayName}`);
+    lines.push('');
+    lines.push(...fixtureTable(view.entries));
+    lines.push('');
+  }
+  if (views.length === 0) {
     lines.push('No benchmark results match the approved Benchmark Matrix.');
     lines.push('');
   }
-
-  // ── Performance Regressions ──────────────────────────────────────────
-  const regressions = result.results.filter(
-    (r) => r.status === 'REGRESSION' && isMetricApproved(r.page, r.metric) && !isMetricUnverified(r.page, r.metric),
-  );
-
-  lines.push('## Performance Regressions');
+  lines.push('</details>');
   lines.push('');
-  if (regressions.length === 0) {
-    lines.push('No performance regressions detected.');
-    lines.push('');
-  }
-  for (const r of regressions) {
-    lines.push(...regressionBlock(r, result.correlation));
-  }
 
   // ── Artifacts ────────────────────────────────────────────────────────
   lines.push('## Artifacts');

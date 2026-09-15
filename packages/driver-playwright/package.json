@@ -9,6 +9,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@perfsense/benchmark-matrix": "workspace:*",
     "@perfsense/core": "workspace:*",
     "@perfsense/evidence-trace": "workspace:*",
     "@perfsense/evidence-network": "workspace:*",

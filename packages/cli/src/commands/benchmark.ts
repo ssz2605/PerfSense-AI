@@ -188,7 +188,7 @@ export async function run(argv: string[]): Promise<void> {
     for (const name of pluginNames) {
       const values = pageResult.runs
         .map((r) => r.metrics[name])
-        .filter((v): v is number => v !== null);
+        .filter((v): v is number => typeof v === 'number');
       medians[name] = values.length > 0 ? median(values) : 0;
     }
     const line = pluginNames

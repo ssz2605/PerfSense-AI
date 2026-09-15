@@ -4,6 +4,7 @@ import type { PageResult, BaselineData, BaselinePage, ThresholdLevel, PerfSenseC
 import { median, classifyRegression } from '@perfsense/statistics';
 import type { ClassificationResult } from '@perfsense/statistics';
 import { EvidenceCollector, isUrl, pageNameFromUrl } from '@perfsense/driver-playwright';
+import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
 import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
 import type { MetricPlugin } from '@perfsense/core';
@@ -69,6 +70,16 @@ function determineStatus(deltaPercent: number, threshold: ThresholdLevel): Check
   return 'REGRESSION';
 }
 
+/** Applies a maxStatus ceiling to an already-computed verdict (delta-only path). */
+export function clampStatus(
+  status: CheckStatus,
+  maxStatus: 'pass' | 'warning' | undefined,
+): CheckStatus {
+  if (maxStatus === 'warning' && status === 'REGRESSION') return 'WARNING';
+  if (maxStatus === 'pass' && status !== 'PASS') return 'PASS';
+  return status;
+}
+
 function padEnd(s: string, len: number): string {
   return s.length >= len ? s : s + ' '.repeat(len - s.length);
 }
@@ -89,7 +100,7 @@ interface EnrichedCheckResult extends MetricCheckResult {
 function collectCurrentValues(pageResult: PageResult, metric: string): number[] {
   return pageResult.runs
     .map((r) => r.metrics[metric])
-    .filter((v): v is number => v !== null);
+    .filter((v): v is number => typeof v === 'number');
 }
 
 function collectBaselineValues(baselinePage: BaselinePage, metric: string): number[] | null {
@@ -235,6 +246,13 @@ export async function run(argv: string[]): Promise<void> {
     const pageName = pageResult.page;
     const baselinePage: BaselinePage | undefined = baseline.pages[pageName];
 
+    // Benchmark Matrix enforcement: only approved fixture/metric combinations
+    // are compared.
+    if (!isKnownFixture(pageName)) {
+      process.stderr.write(`Warning: page "${pageName}" not in Benchmark Matrix, skipping\n`);
+      continue;
+    }
+
     if (!baselinePage) {
       process.stderr.write(`Warning: no baseline data for page "${pageName}", skipping\n`);
       continue;
@@ -243,6 +261,11 @@ export async function run(argv: string[]): Promise<void> {
     const metricNames = getMetricNames(pageResult.runs);
 
     for (const metric of metricNames) {
+      if (!isMetricApproved(pageName, metric)) {
+        process.stderr.write(`Warning: ${pageName}/${metric} not approved by Benchmark Matrix, skipping\n`);
+        continue;
+      }
+
       const currentValues = collectCurrentValues(pageResult, metric);
       if (currentValues.length === 0) {
         process.stderr.write(`Warning: no valid values for ${pageName}/${metric}, skipping\n`);
@@ -259,6 +282,10 @@ export async function run(argv: string[]): Promise<void> {
       const baselineMedian = baselineStats.median;
       const deltaPercent = computeDeltaPercent(baselineMedian, currentMedian);
       const threshold = getThreshold(metric, config);
+      // Warn-only metrics can never post REGRESSION; beyond that, the config
+      // may cap a metric (memory, drift) at warning too.
+      const effectiveMaxStatus: 'pass' | 'warning' | undefined =
+        isMetricWarnOnly(pageName, metric) ? 'warning' : threshold.maxStatus;
 
       let status: CheckStatus;
       let pValue: number | null = null;
@@ -270,16 +297,19 @@ export async function run(argv: string[]): Promise<void> {
         const hasBaselineValues = baselineValues !== null && baselineValues.length > 0;
 
         if (hasBaselineValues) {
-          const result = classifyRegression(baselineValues, currentValues, threshold);
+          const result = classifyRegression(baselineValues, currentValues, {
+            ...threshold,
+            maxStatus: effectiveMaxStatus,
+          });
           status = mapStatus(result.status);
           pValue = result.pValue;
           effectSize = result.effectSize;
           confidenceInterval = result.confidenceInterval;
         } else {
-          status = determineStatus(deltaPercent, threshold);
+          status = clampStatus(determineStatus(deltaPercent, threshold), effectiveMaxStatus);
         }
       } else {
-        status = determineStatus(deltaPercent, threshold);
+        status = clampStatus(determineStatus(deltaPercent, threshold), effectiveMaxStatus);
       }
 
       allResults.push({

@@ -11,6 +11,7 @@ import type {
 } from "@perfsense/core";
 import { runScenario, isScenario, Scenario } from "./scenarios";
 import type { ScenarioName } from "./scenarios";
+import { isMetricApproved } from "@perfsense/benchmark-matrix";
 
 export function isUrl(value: string): boolean {
   return /^https?:\/\//i.test(value);
@@ -119,6 +120,22 @@ export class BenchmarkDriver {
           : `http://localhost:${port}/${pageName}`;
         const pageRuns: BenchmarkRun[] = [];
 
+        // The Benchmark Matrix is the source of truth for which metrics may be
+        // collected per fixture. Unauthorized combinations are rejected HERE at
+        // the data boundary, so they never reach the raw results, the baseline,
+        // or the report.
+        const approvedPlugins = plugins.filter((p) =>
+          isMetricApproved(pageName, p.name),
+        );
+        const skippedPluginNames = plugins
+          .filter((p) => !isMetricApproved(pageName, p.name))
+          .map((p) => p.name);
+        if (skippedPluginNames.length > 0) {
+          console.log(
+            `    ${pageName}: skipping metrics not in Benchmark Matrix: ${skippedPluginNames.join(", ")}`,
+          );
+        }
+
         // Ordered interaction phases for this page: the config's per-page map
         // wins when present, otherwise the single global scenario.
         const pagePhases: ScenarioName[] = stagePhases(
@@ -150,14 +167,14 @@ export class BenchmarkDriver {
                   }
                 });
 
-                for (const plugin of plugins) {
+                for (const plugin of approvedPlugins) {
                   await plugin.setupPage(page);
                 }
 
                 await page.goto(url, { waitUntil: "load" });
                 console.log(`    goto done at +${Date.now() - runStartT0}ms`);
 
-                for (const plugin of plugins) {
+                for (const plugin of approvedPlugins) {
                   if (plugin.setupPostNav) {
                     await plugin.setupPostNav(page);
                   }
@@ -294,7 +311,7 @@ export class BenchmarkDriver {
 
                 const runMetrics: Record<string, number | null> = {};
 
-                for (const plugin of plugins) {
+                for (const plugin of approvedPlugins) {
                   const metricValue = await plugin.extractMetric(page);
                   runMetrics[plugin.name] = metricValue.value;
                 }
@@ -308,7 +325,7 @@ export class BenchmarkDriver {
 
               const line =
                 `  run ${i + 1}/${runs} -> ` +
-                plugins
+                approvedPlugins
                   .map((p) => {
                     const v = runMetrics[p.name];
                     const unit =

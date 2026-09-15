@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { computeScheduleLag } from "./scheduleLag";
 
 /**
  * Page-side instrumentation for the real Music Blocks app.
@@ -145,7 +146,12 @@ export async function waitForRunEnd(
 export async function readPerfsense(
   page: Page,
 ): Promise<Record<string, number | null>> {
-  return page.evaluate(() => {
+  const scheduleLagHelper = computeScheduleLag.toString();
+  return page.evaluate((helperSrc: string) => {
+    // Rehydrate the pure schedule-lag helper inside the page (same code
+    // tested in Node under scheduleLag.test.ts).
+    const computeScheduleLag: typeof import("./scheduleLag").computeScheduleLag =
+      new Function("return (" + helperSrc + ")")();
     const ps = (window as any).__perfsense || {};
     const t = ps.transport || null;
     const out: Record<string, number | null> = {
@@ -155,7 +161,6 @@ export async function readPerfsense(
       voiceOnsetError: null,
       blocksExecuted: null,
       maxDepth: null,
-      maxActionDepth: null,
       executionTime: null,
       maxQueueDepth: null,
       projectLoadTime: null,
@@ -166,6 +171,8 @@ export async function readPerfsense(
       heapAfterBoot: null,
       memoryDelta: null,
       retainedHeap: null,
+      scheduleLagMean: null,
+      scheduleLagMax: null,
     };
     const mean = (arr: number[]) =>
       arr.length === 0 ? null : arr.reduce((s, v) => s + v, 0) / arr.length;
@@ -189,13 +196,14 @@ export async function readPerfsense(
       }
       out.cumulativeDrift = drift;
       out.voiceOnsetError = t.onset;
+      const lag = computeScheduleLag(t.scheduledTx, t.firedAudio);
+      out.scheduleLagMean = lag.mean;
+      out.scheduleLagMax = lag.max;
     }
     if (ps.exec) {
       out.blocksExecuted = ps.exec.blocksExecuted;
       out.maxDepth = ps.exec.maxDepth === 0 ? null : ps.exec.maxDepth;
     }
-    if (typeof ps.maxActionDepth === "number")
-      out.maxActionDepth = ps.maxActionDepth;
     if (typeof ps.executionTime === "number")
       out.executionTime = ps.executionTime;
     if (typeof ps.maxQueueDepth === "number")
@@ -213,5 +221,5 @@ export async function readPerfsense(
     if (typeof ps.memoryDelta === "number") out.memoryDelta = ps.memoryDelta;
     if (typeof ps.retainedHeap === "number") out.retainedHeap = ps.retainedHeap;
     return out;
-  });
+  }, scheduleLagHelper);
 }
