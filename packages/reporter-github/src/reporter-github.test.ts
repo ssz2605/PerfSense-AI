@@ -112,7 +112,8 @@ describe('summary statuses and compact details', () => {
         makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'WARNING', deltaPercent: 12 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7 }),
-        makeEntry({ page: 'RainbowConnection.html', metric: 'memoryDelta', status: 'PASS', deltaPercent: -4 }),
+        // exportMIDITime with a meaningful improvement to cover the Improved label
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: -20, currentMedian: 800 }),
       ],
       summary: { pass: 2, warning: 1, regression: 1, failed: true },
     };

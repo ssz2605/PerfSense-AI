@@ -28,7 +28,7 @@ describe('Benchmark Matrix contract', () => {
 
   it('defines the approved metric sets per fixture', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
-    expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'memoryDelta', 'retainedHeap']);
+    expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime']);
     expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError']);
     expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth']);
     expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'maxDepth', 'blocksExecuted']);
@@ -44,6 +44,10 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricApproved('Frere-Jacques.html', 'maxDepth')).toBe(false);
     expect(isMetricApproved('Frere-Jacques.html', 'memoryDelta')).toBe(false);
     expect(isMetricApproved('Frere-Jacques.html', 'retainedHeap')).toBe(false);
+    // Rainbow owns load/save/export only; the memory metrics belong to
+    // musical-tree (the only fixture that records them during playback).
+    expect(isMetricApproved('RainbowConnection.html', 'memoryDelta')).toBe(false);
+    expect(isMetricApproved('RainbowConnection.html', 'retainedHeap')).toBe(false);
     // maxActionDepth is not in the approved matrix anywhere.
     expect(isMetricApproved('musical-tree.html', 'maxActionDepth')).toBe(false);
     // crabcanon-plot only exposes its two schedule-lag metrics.
@@ -68,10 +72,12 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricWarnOnly('Frere-Jacques.html', 'callbackLatencyMax')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'cumulativeDrift')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'voiceOnsetError')).toBe(true);
-    expect(isMetricWarnOnly('RainbowConnection.html', 'memoryDelta')).toBe(true);
-    expect(isMetricWarnOnly('RainbowConnection.html', 'retainedHeap')).toBe(true);
     expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(true);
     expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(true);
+    // Rainbow no longer lists the memory metrics: not approved here means not
+    // warn-only here either (musical-tree is their only home).
+    expect(isMetricWarnOnly('RainbowConnection.html', 'memoryDelta')).toBe(false);
+    expect(isMetricWarnOnly('RainbowConnection.html', 'retainedHeap')).toBe(false);
     // Verified metrics are not warn-only, and neither is scheduleLag.
     expect(isMetricWarnOnly('index.html', 'bootstrapTotal')).toBe(false);
     expect(isMetricWarnOnly('RainbowConnection.html', 'projectLoadTime')).toBe(false);

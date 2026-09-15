@@ -59,9 +59,13 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'RainbowConnection.html',
     displayName: 'Rainbow Connection',
-    metrics: ['projectLoadTime', 'saveTime', 'exportMIDITime', 'memoryDelta', 'retainedHeap'],
+    // Memory metrics (memoryDelta, retainedHeap) are measured only by
+    // musical-tree's playToCompletion double-run; Rainbow's load/save/export
+    // workflow does not record heap, so the contract keeps Rainbow at its
+    // load/save/export metrics and musical-tree owns the memory coverage.
+    metrics: ['projectLoadTime', 'saveTime', 'exportMIDITime'],
     unverified: [],
-    warnOnly: ['memoryDelta', 'retainedHeap'],
+    warnOnly: [],
   },
   {
     fixture: 'Frere-Jacques.html',
