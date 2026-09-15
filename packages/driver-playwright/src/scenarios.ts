@@ -179,8 +179,19 @@ const saveExportSnippet = `
       ps.exportMIDITime = null;
     }
   }
+  if (typeof ps.saveAsLilypondTime !== 'number') {
+    const hasUiLilypond = mb.ui && typeof mb.ui.saveAsLilypond === 'function';
+    if (hasUiLilypond) {
+      const t0 = performance.now();
+      try { await mb.ui.saveAsLilypond(); } catch (e) { void e; }
+      ps.saveAsLilypondTime = performance.now() - t0;
+    } else {
+      clickById(['submitLilypond', 'saveLilypond']);
+      ps.saveAsLilypondTime = null;
+    }
+  }
   void startMs; void timeoutMs;
-  return { saveTime: ps.saveTime, exportMIDITime: ps.exportMIDITime };
+  return { saveTime: ps.saveTime, exportMIDITime: ps.exportMIDITime, saveAsLilypondTime: ps.saveAsLilypondTime };
 })
 `;
 

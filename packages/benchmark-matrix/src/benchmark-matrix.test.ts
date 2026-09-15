@@ -28,7 +28,7 @@ describe('Benchmark Matrix contract', () => {
 
   it('defines the approved metric sets per fixture', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
-    expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime']);
+    expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime']);
     expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError']);
     expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth']);
     expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'maxDepth', 'blocksExecuted']);
@@ -93,7 +93,7 @@ describe('Benchmark Matrix contract', () => {
     // metrics must be rejected for fixtures that do not list them.
     const allMetrics = [
       'bootstrapTotal', 'initTotal', 'heapAfterBoot',
-      'projectLoadTime', 'saveTime', 'exportMIDITime',
+      'projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime',
       'callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError',
       'maxQueueDepth', 'executionTime', 'blocksExecuted', 'maxDepth',
       'memoryDelta', 'retainedHeap', 'scheduleLagMean', 'scheduleLagMax',

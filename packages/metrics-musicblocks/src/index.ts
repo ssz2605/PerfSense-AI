@@ -16,6 +16,7 @@ export { MemoryDelta } from './memoryDelta';
 export { RetainedHeap } from './retainedHeap';
 export { SaveTime } from './saveTime';
 export { ExportMIDITime } from './exportMIDITime';
+export { SaveAsLilypondTime } from './saveAsLilypondTime';
 export { BootstrapTotal } from './bootstrapTotal';
 export { InitTotal } from './initTotal';
 export { ScheduleLagMean } from './scheduleLagMean';

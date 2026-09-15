@@ -103,7 +103,13 @@ describe('baseline save contract', () => {
         page: 'RainbowConnection.html',
         runs: Array.from({ length: 5 }, (_, i) => ({
           run: i + 1,
-          metrics: { projectLoadTime: FIVE_RUNS[i], memoryDelta: 1000 + i },
+          metrics: {
+            projectLoadTime: FIVE_RUNS[i],
+            // Unauthorized for Rainbow (musical-tree owns memory coverage).
+            memoryDelta: 1000 + i,
+            // Approved: LilyPond notation export, part of Rainbow's export class.
+            saveAsLilypondTime: FIVE_RUNS[i] + 400,
+          },
         })),
       },
     ]);
@@ -116,6 +122,10 @@ describe('baseline save contract', () => {
     expect(stats.median).toBe(1000); // median of [990,995,1000,1005,1010]
     expect(stats.p10).toBeLessThanOrEqual(1000);
     expect(stats.p90).toBeGreaterThanOrEqual(1005);
+    // The approved LilyPond export metric is kept like the other Rainbow metrics.
+    const lilypondStats = baseline.pages['RainbowConnection.html'].saveAsLilypondTime;
+    expect(lilypondStats.values).toHaveLength(5);
+    expect(lilypondStats.median).toBe(1400);
     // memoryDelta is not approved for Rainbow (musical-tree owns the memory
     // metrics), so the decoy value must be rejected at baseline-save time.
     expect(baseline.pages['RainbowConnection.html'].memoryDelta).toBeUndefined();

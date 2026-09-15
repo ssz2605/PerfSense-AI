@@ -17,6 +17,7 @@ import { MemoryDelta } from './memoryDelta';
 import { RetainedHeap } from './retainedHeap';
 import { SaveTime } from './saveTime';
 import { ExportMIDITime } from './exportMIDITime';
+import { SaveAsLilypondTime } from './saveAsLilypondTime';
 import { BootstrapTotal } from './bootstrapTotal';
 import { InitTotal } from './initTotal';
 import { ScheduleLagMean } from './scheduleLagMean';
@@ -46,6 +47,7 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   retainedheap: RetainedHeap,
   savetime: SaveTime,
   exportmiditime: ExportMIDITime,
+  saveaslilypondtime: SaveAsLilypondTime,
   bootstraptotal: BootstrapTotal,
   inittotal: InitTotal,
   schedulelagmean: ScheduleLagMean,

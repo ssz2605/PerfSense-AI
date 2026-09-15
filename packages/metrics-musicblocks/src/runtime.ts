@@ -166,6 +166,7 @@ export async function readPerfsense(
       projectLoadTime: null,
       saveTime: null,
       exportMIDITime: null,
+      saveAsLilypondTime: null,
       bootstrapTotal: null,
       initTotal: null,
       heapAfterBoot: null,
@@ -213,6 +214,8 @@ export async function readPerfsense(
     if (typeof ps.saveTime === "number") out.saveTime = ps.saveTime;
     if (typeof ps.exportMIDITime === "number")
       out.exportMIDITime = ps.exportMIDITime;
+    if (typeof ps.saveAsLilypondTime === "number")
+      out.saveAsLilypondTime = ps.saveAsLilypondTime;
     if (typeof ps.bootstrapTotal === "number")
       out.bootstrapTotal = ps.bootstrapTotal;
     if (typeof ps.initTotal === "number") out.initTotal = ps.initTotal;

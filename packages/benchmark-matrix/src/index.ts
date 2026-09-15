@@ -63,7 +63,7 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // musical-tree's playToCompletion double-run; Rainbow's load/save/export
     // workflow does not record heap, so the contract keeps Rainbow at its
     // load/save/export metrics and musical-tree owns the memory coverage.
-    metrics: ['projectLoadTime', 'saveTime', 'exportMIDITime'],
+    metrics: ['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime'],
     unverified: [],
     warnOnly: [],
   },
@@ -107,6 +107,7 @@ const METRIC_UNITS: Record<string, string> = {
   projectLoadTime: 'ms',
   saveTime: 'ms',
   exportMIDITime: 'ms',
+  saveAsLilypondTime: 'ms',
   memoryDelta: 'B',
   retainedHeap: 'B',
   callbackLatencyMean: 'ms',
