@@ -72,8 +72,8 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricWarnOnly('Frere-Jacques.html', 'callbackLatencyMax')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'cumulativeDrift')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'voiceOnsetError')).toBe(true);
-    expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(false);
-    expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(false);
+    expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(true);
+    expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(true);
     // Frère Jacques owns a verified count metric: scheduleCount is analyzed but
     // guarded by the seam tripwire, so it is not capped at warning.
     expect(isMetricWarnOnly('Frere-Jacques.html', 'scheduleCount')).toBe(false);

@@ -109,15 +109,7 @@ export class BenchmarkDriver {
     // so the memory probes can force collection before each heap read: without
     // it, headless performance.memory never refreshes and memoryDelta /
     // retainedHeap read 0 (noise, not signal).
-    //
-    // Headless audio also runs on a synthesized clock (drift collapses to ~0).
-    // PERFSENSE_HEADED=1 switches to a headed browser so the Layer C spike can
-    // measure the transport seam against a real PulseAudio clock under Xvfb —
-    // that is the ONLY run mode whose cumulativeDrift/latency values are
-    // truthful, so the official baseline stays headless and this flag is used
-    // strictly for the controlled Layer C spike workflow.
     const browser: Browser = await chromium.launch({
-      headless: process.env.PERFSENSE_HEADED !== "1",
       args: [
         "--autoplay-policy=no-user-gesture-required",
         "--js-flags=--expose-gc",

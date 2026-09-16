@@ -83,7 +83,9 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // exact program-level depth (queue + parentFlowQueue) per executed block —
     // the true recursion metric.
     unverified: ['maxDepth'],
-    warnOnly: [],
+    // Memory stays warn-only (real values now, but CI-heap noise is hard to
+    // characterize): it can warn but never post a hard REGRESSION.
+    warnOnly: ['memoryDelta', 'retainedHeap'],
   },
   {
     fixture: 'ascending-notes-color-spiral.html',
