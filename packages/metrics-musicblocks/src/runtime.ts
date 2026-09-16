@@ -50,7 +50,12 @@ const TRANSPORT_COLLECTOR_SNIPPET = `
 `;
 
 /** Counts block executions via runFromBlockNow (the engine's real per-block
- * path — queue pop/shift is deprecated in the modern app) and tracks nesting. */
+ * path — queue pop/shift is deprecated in the modern app) and tracks nesting.
+ * maxDepth keeps its original synchronous JS-nesting meaning. maxLogicalDepth
+ * (experimental, excluded from the approved matrix) is the exact logical
+ * action+flow depth per turtle at every executed block — mirrors
+ * logicalDepth.ts in @perfsense/driver-playwright, inlined here so this
+ * package stays dependency-free. */
 const EXECUTION_COLLECTOR_SNIPPET = `
   (function () {
     const ps = (window).__perfsense = (window).__perfsense || {};
@@ -58,7 +63,7 @@ const EXECUTION_COLLECTOR_SNIPPET = `
     const mb = (window).__mb;
     if (!mb || !mb.logo) return;
     ps.execLatched = true;
-    ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0 };
+    ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0, maxLogicalDepth: 0 };
     try {
       const logo = mb.logo;
       const origRun = logo.runFromBlockNow.bind(logo);
@@ -67,6 +72,26 @@ const EXECUTION_COLLECTOR_SNIPPET = `
         exec.depth = exec.depth + 1;
         if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
         exec.blocksExecuted = exec.blocksExecuted + 1;
+        // The engine passes a NUMERIC turtle index and resolves the turtle
+        // itself via logo.turtles.ithTurtle() (logo.js:1938). Resolve the same
+        // way so maxLogicalDepth reads the real turtle's queue + flow depths.
+        try {
+          if (logo.turtles && typeof logo.turtles.ithTurtle === "function") {
+            const tur = logo.turtles.ithTurtle(turtle);
+            if (tur != null) {
+              const queued = Array.isArray(tur.queue) ? tur.queue.length : 0;
+              const flow = Array.isArray(tur.parentFlowQueue)
+                ? tur.parentFlowQueue.length
+                : 0;
+              if (queued + flow > exec.maxLogicalDepth) {
+                exec.maxLogicalDepth = queued + flow;
+              }
+            }
+          }
+        } catch (e) {
+          // Turtle may be mid-deletion; contribute depth 0 for this block.
+          void e;
+        }
         try {
           return origRun(l, turtle, blk, isflow, receivedArg, queueStart);
         } finally {
@@ -161,6 +186,8 @@ export async function readPerfsense(
       voiceOnsetError: null,
       blocksExecuted: null,
       maxDepth: null,
+      maxLogicalDepth: null,
+      scheduleCount: null,
       executionTime: null,
       maxQueueDepth: null,
       projectLoadTime: null,
@@ -197,6 +224,7 @@ export async function readPerfsense(
       }
       out.cumulativeDrift = drift;
       out.voiceOnsetError = t.onset;
+      out.scheduleCount = typeof t.count === "number" ? t.count : null;
       const lag = computeScheduleLag(t.scheduledTx, t.firedAudio);
       out.scheduleLagMean = lag.mean;
       out.scheduleLagMax = lag.max;
@@ -204,6 +232,8 @@ export async function readPerfsense(
     if (ps.exec) {
       out.blocksExecuted = ps.exec.blocksExecuted;
       out.maxDepth = ps.exec.maxDepth === 0 ? null : ps.exec.maxDepth;
+      out.maxLogicalDepth =
+        ps.exec.maxLogicalDepth === 0 ? null : ps.exec.maxLogicalDepth;
     }
     if (typeof ps.executionTime === "number")
       out.executionTime = ps.executionTime;

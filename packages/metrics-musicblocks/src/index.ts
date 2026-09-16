@@ -21,7 +21,16 @@ export { BootstrapTotal } from './bootstrapTotal';
 export { InitTotal } from './initTotal';
 export { ScheduleLagMean } from './scheduleLagMean';
 export { ScheduleLagMax } from './scheduleLagMax';
+export { ScheduleCount } from './scheduleCount';
+export { MaxLogicalDepth } from './maxLogicalDepth';
 export { computeScheduleLag } from './scheduleLag';
+export {
+  checkTransportSeamAlive,
+  FRERE_JACQUES_TRANSPORT_METRICS,
+  analyzeAudioClock,
+  SYNTHETIC_DRIFT_THRESHOLD_MS,
+} from './seamTripwire';
+export type { TransportSeamCheck, AudioClockProvenance, AudioClockAnalysis } from './seamTripwire';
 export { MUSICBLOCKS_PLUGIN_REGISTRY } from './registry';
 export {
   installTransportCollector,

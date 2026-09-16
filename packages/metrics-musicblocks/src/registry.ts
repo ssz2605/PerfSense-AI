@@ -22,6 +22,8 @@ import { BootstrapTotal } from './bootstrapTotal';
 import { InitTotal } from './initTotal';
 import { ScheduleLagMean } from './scheduleLagMean';
 import { ScheduleLagMax } from './scheduleLagMax';
+import { ScheduleCount } from './scheduleCount';
+import { MaxLogicalDepth } from './maxLogicalDepth';
 
 /**
  * Every music-blocks seam metric, keyed by lowercase name so lookups are
@@ -51,5 +53,7 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   bootstraptotal: BootstrapTotal,
   inittotal: InitTotal,
   schedulelagmean: ScheduleLagMean,
-  schedulelagmax: ScheduleLagMax
+  schedulelagmax: ScheduleLagMax,
+  schedulecount: ScheduleCount,
+  maxlogicaldepth: MaxLogicalDepth
 };

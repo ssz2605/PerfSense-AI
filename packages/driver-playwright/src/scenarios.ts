@@ -1,4 +1,5 @@
 import type { Page } from "playwright";
+import { LOGICAL_DEPTH_HELPER_SRC } from "./logicalDepth";
 
 /**
  * Per-page interaction scenarios that turn a real Music Blocks page into a
@@ -235,16 +236,36 @@ const playToCompletionSnippet = `
 
   // --- install execution collector (idempotent) ---
   // The modern engine executes through runFromBlockNow, not deprecated queue
-  // pop/shift, so blocksExecuted counts that entry point and maxDepth its nesting.
+  // pop/shift, so blocksExecuted counts that entry point and maxDepth its
+  // JS nesting. maxLogicalDepth (experimental, not in the approved matrix) is
+  // the exact logical action+flow depth per turtle at every executed block:
+  // the engine runs flow recursion iteratively through queue +
+  // parentFlowQueue, so that sum IS the program-level nesting depth
+  // (see logicalDepth.ts, unit-tested).
   if (!ps.execLatched && mb.logo) {
     ps.execLatched = true;
-    ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0 };
+    ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0, maxLogicalDepth: 0 };
     const logo = mb.logo;
+    const __logicalDepthOf = ${LOGICAL_DEPTH_HELPER_SRC};
     const origRun = logo.runFromBlockNow.bind(logo);
     logo.runFromBlockNow = function () {
       const exec = ps.exec;
       exec.depth = exec.depth + 1;
       if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
+      // The engine receives a NUMERIC turtle index and resolves the turtle
+      // itself via logo.turtles.ithTurtle() (logo.js:1938) — so resolve the
+      // same way here; otherwise queue/parentFlowQueue never resolve and the
+      // logical depth always reads 0.
+      let ld = 0;
+      try {
+        if (logo.turtles && typeof logo.turtles.ithTurtle === "function") {
+          ld = __logicalDepthOf(logo.turtles.ithTurtle(arguments[1]));
+        }
+      } catch (e) {
+        // Turtle may be mid-deletion; contribute depth 0 for this block.
+        void e;
+      }
+      if (ld > exec.maxLogicalDepth) exec.maxLogicalDepth = ld;
       exec.blocksExecuted = exec.blocksExecuted + 1;
       try { return origRun.apply(logo, arguments); } finally { exec.depth = exec.depth - 1; }
     };
@@ -379,7 +400,18 @@ const playToCompletionSnippet = `
     if (total > maxQ) maxQ = total;
   }, 25);
 
-  const mem = () => (typeof performance.memory === 'undefined' ? null : performance.memory.usedJSHeapSize);
+  const mem = () => {
+    // Force a collection before each read: usedJSHeapSize only refreshes after
+    // GC, and headless Chromium without --expose-gc never collects between
+    // reads, so unforced reads report stale (often zero) deltas. Falls back to
+    // a plain read when the browser was launched without --expose-gc.
+    try {
+      if (typeof window.gc === "function") window.gc();
+    } catch (e) {
+      void e;
+    }
+    return typeof performance.memory === "undefined" ? null : performance.memory.usedJSHeapSize;
+  };
 
   try {
     // Warm-up run feeds the retained-memory pattern; executionTime is read from
@@ -395,7 +427,7 @@ const playToCompletionSnippet = `
     // while _alreadyRunning). Also resets transport counters so the latency
     // metrics describe the measured run only.
     await stopRun();
-    if (ps.exec) { ps.exec.blocksExecuted = 0; ps.exec.maxDepth = 0; }
+    if (ps.exec) { ps.exec.blocksExecuted = 0; ps.exec.maxDepth = 0; ps.exec.maxLogicalDepth = 0; }
     maxAction = 0;
     maxQ = 0;
     if (ps.transport) {
@@ -430,6 +462,7 @@ const playToCompletionSnippet = `
     maxActionDepth: ps.maxActionDepth,
     blocksExecuted: ps.exec ? ps.exec.blocksExecuted : null,
     maxDepth: ps.exec ? ps.exec.maxDepth : null,
+    maxLogicalDepth: ps.exec ? ps.exec.maxLogicalDepth : null,
     memoryDelta: ps.memoryDelta,
     retainedHeap: ps.retainedHeap
   };

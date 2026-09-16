@@ -70,23 +70,25 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'Frere-Jacques.html',
     displayName: 'Frère Jacques',
-    metrics: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError'],
+    metrics: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError', 'scheduleCount'],
     unverified: [],
     warnOnly: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError'],
   },
   {
     fixture: 'musical-tree.html',
     displayName: 'musical-tree',
-    metrics: ['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth'],
-    // maxDepth is suspected to measure runFromBlockNow() nesting rather than
-    // logical action recursion and is currently sanity/unverified.
+    metrics: ['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth', 'maxLogicalDepth'],
+    // maxDepth measures JS-call nesting of runFromBlockNow (= 1), not logical
+    // recursion; retained as Unverified for visibility. maxLogicalDepth is the
+    // exact program-level depth (queue + parentFlowQueue) per executed block —
+    // the true recursion metric.
     unverified: ['maxDepth'],
-    warnOnly: ['memoryDelta', 'retainedHeap'],
+    warnOnly: [],
   },
   {
     fixture: 'ascending-notes-color-spiral.html',
     displayName: 'ascending-notes-color-spiral',
-    metrics: ['executionTime', 'maxDepth', 'blocksExecuted'],
+    metrics: ['executionTime', 'maxDepth', 'blocksExecuted', 'maxLogicalDepth'],
     unverified: ['maxDepth'],
     warnOnly: [],
   },
@@ -119,6 +121,8 @@ const METRIC_UNITS: Record<string, string> = {
   executionTime: 'ms',
   maxQueueDepth: 'count',
   maxDepth: 'count',
+  maxLogicalDepth: 'count',
+  scheduleCount: 'count',
   blocksExecuted: 'count',
 };
 

@@ -6,7 +6,12 @@ import type { ClassificationResult } from '@perfsense/statistics';
 import { EvidenceCollector, isUrl, pageNameFromUrl } from '@perfsense/driver-playwright';
 import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
-import { MUSICBLOCKS_PLUGIN_REGISTRY } from '@perfsense/metrics-musicblocks';
+import {
+  MUSICBLOCKS_PLUGIN_REGISTRY,
+  checkTransportSeamAlive,
+  FRERE_JACQUES_TRANSPORT_METRICS,
+} from '@perfsense/metrics-musicblocks';
+import type { TransportSeamCheck } from '@perfsense/metrics-musicblocks';
 import type { MetricPlugin } from '@perfsense/core';
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
@@ -108,6 +113,49 @@ function collectBaselineValues(baselinePage: BaselinePage, metric: string): numb
   if (!stats) return null;
   if (Array.isArray(stats.values) && stats.values.length > 0) return stats.values;
   return null;
+}
+
+export interface DeadSeamFinding {
+  page: string;
+  check: TransportSeamCheck;
+}
+
+/**
+ * Layer A seam tripwire: scans current page results for a dead Tone.Transport
+ * seam. Only pages whose fixture approves an audio metric participate. A seam
+ * is dead when no transport.schedule event fired (scheduleCount is 0/none) and
+ * no audio observation survived into the results — i.e. every audio column
+ * would silently no-op. This is a hard precondition, not a statistical rule:
+ * it never alters an approved metric's status, it simply refuses to report
+ * "no data" as a successful audio run.
+ */
+export function findDeadSeamPages(
+  current: PageResult[],
+  isAudioApproved: (page: string) => boolean,
+): DeadSeamFinding[] {
+  const findings: DeadSeamFinding[] = [];
+  for (const pageResult of current) {
+    if (!isAudioApproved(pageResult.page)) continue;
+    let scheduleCount: number | null = null;
+    const audio: Record<string, number | null> = {
+      callbackLatencyMean: null,
+      callbackLatencyMax: null,
+      cumulativeDrift: null,
+      voiceOnsetError: null,
+    };
+    for (const run of pageResult.runs) {
+      const m = run.metrics;
+      if (typeof m.scheduleCount === 'number') scheduleCount = m.scheduleCount;
+      for (const key of Object.keys(audio)) {
+        if (typeof m[key] === 'number') audio[key] = m[key] as number;
+      }
+    }
+    const check = checkTransportSeamAlive({ ...audio, scheduleCount });
+    if (!check.alive) {
+      findings.push({ page: pageResult.page, check });
+    }
+  }
+  return findings;
 }
 
 function buildPluginsFromMetrics(metricNames: string[]): MetricPlugin[] {
@@ -330,6 +378,22 @@ export async function run(argv: string[]): Promise<void> {
         regressedPages.add(pageName);
       }
     }
+  }
+
+  // Layer A seam tripwire (hard precondition, no statistical change): a dead
+  // Tone.Transport seam on an approved audio page silently nulls every audio
+  // metric — fail loudly rather than report "no data" as a valid run.
+  const deadSeams = findDeadSeamPages(current, (page) =>
+    FRERE_JACQUES_TRANSPORT_METRICS.some((m) => isMetricApproved(page, m)),
+  );
+  if (deadSeams.length > 0) {
+    for (const finding of deadSeams) {
+      console.error(
+        `SEAM TRIPWIRE (${finding.page}): ${finding.check.reason ?? 'Tone.Transport seam is dead'}`,
+      );
+    }
+    process.exitCode = 1;
+    return;
   }
 
   // Evidence collection

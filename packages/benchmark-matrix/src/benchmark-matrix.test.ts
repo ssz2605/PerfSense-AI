@@ -29,9 +29,9 @@ describe('Benchmark Matrix contract', () => {
   it('defines the approved metric sets per fixture', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
     expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime']);
-    expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError']);
-    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth']);
-    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'maxDepth', 'blocksExecuted']);
+    expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError', 'scheduleCount']);
+    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth', 'maxLogicalDepth']);
+    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'maxDepth', 'blocksExecuted', 'maxLogicalDepth']);
     expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
   });
 
@@ -72,8 +72,14 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricWarnOnly('Frere-Jacques.html', 'callbackLatencyMax')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'cumulativeDrift')).toBe(true);
     expect(isMetricWarnOnly('Frere-Jacques.html', 'voiceOnsetError')).toBe(true);
-    expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(true);
-    expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(true);
+    expect(isMetricWarnOnly('musical-tree.html', 'memoryDelta')).toBe(false);
+    expect(isMetricWarnOnly('musical-tree.html', 'retainedHeap')).toBe(false);
+    // Frère Jacques owns a verified count metric: scheduleCount is analyzed but
+    // guarded by the seam tripwire, so it is not capped at warning.
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'scheduleCount')).toBe(false);
+    // The exact recursion metric is verified for its fixtures (unlike maxDepth).
+    expect(isMetricWarnOnly('musical-tree.html', 'maxLogicalDepth')).toBe(false);
+    expect(isMetricWarnOnly('ascending-notes-color-spiral.html', 'maxLogicalDepth')).toBe(false);
     // Rainbow no longer lists the memory metrics: not approved here means not
     // warn-only here either (musical-tree is their only home).
     expect(isMetricWarnOnly('RainbowConnection.html', 'memoryDelta')).toBe(false);
@@ -96,7 +102,9 @@ describe('Benchmark Matrix contract', () => {
       'projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime',
       'callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError',
       'maxQueueDepth', 'executionTime', 'blocksExecuted', 'maxDepth',
+      'maxLogicalDepth',
       'memoryDelta', 'retainedHeap', 'scheduleLagMean', 'scheduleLagMax',
+      'scheduleCount',
     ];
     for (const contract of BENCHMARK_MATRIX) {
       for (const metric of allMetrics) {
@@ -117,6 +125,8 @@ describe('Benchmark Matrix contract', () => {
     expect(formatMetricValue(47400000, 'heapAfterBoot')).toBe('47.4 MB');
     expect(formatMetricValue(0, 'memoryDelta')).toBe('0 B');
     expect(formatMetricValue(1, 'maxDepth')).toBe('1');
+    expect(formatMetricValue(254, 'maxLogicalDepth')).toBe('254');
+    expect(formatMetricValue(268, 'scheduleCount')).toBe('268');
     expect(formatMetricValue(42, 'blocksExecuted')).toBe('42');
     expect(formatDeltaPercent(159.4)).toBe('+159.4%');
     expect(formatDeltaPercent(-3.01)).toBe('-3.0%');
