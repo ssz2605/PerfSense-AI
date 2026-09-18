@@ -255,6 +255,27 @@ describe('AI reasoning / root cause', () => {
     expect(comment).toContain('**Likely cause:** No likely cause identified.');
   });
 
+  it('renders a top-level AI analysis section when aiAnalysis is provided', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
+      correlation: makeCorrelation('exportMIDITime', null),
+    };
+    const comment = generatePRComment(result, { ...PR_27, aiAnalysis: 'The 2000ms loader deferral in js/loader.js delays bootstrapTotal by ~2000ms.' });
+    expect(comment).toContain('<summary>AI analysis</summary>');
+    expect(comment).toContain('The 2000ms loader deferral in js/loader.js delays bootstrapTotal by ~2000ms.');
+  });
+
+  it('omits the AI analysis section when aiAnalysis is not provided', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
+      correlation: makeCorrelation('exportMIDITime', null),
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).not.toContain('<summary>AI analysis</summary>');
+  });
+
   it('renders cross-metric shared causes instead of hiding them', () => {
     const result: CheckResult = {
       results: [

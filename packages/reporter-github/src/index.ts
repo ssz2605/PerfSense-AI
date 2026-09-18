@@ -293,6 +293,17 @@ export function generatePRComment(
   lines.push('</details>');
   lines.push('');
 
+  // ── AI Analysis (when available) ─────────────────────────────────────
+  if (options.aiAnalysis && regressions.length > 0) {
+    lines.push('<details>');
+    lines.push('<summary>AI analysis</summary>');
+    lines.push('');
+    lines.push(options.aiAnalysis);
+    lines.push('');
+    lines.push('</details>');
+    lines.push('');
+  }
+
   // ── Artifacts ────────────────────────────────────────────────────────
   lines.push('## Artifacts');
   lines.push('');

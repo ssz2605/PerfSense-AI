@@ -223,7 +223,18 @@ export async function run(argv: string[]): Promise<void> {
   if (hasRegression && correlation && aiProvider) {
     try {
       const { generateAIAnalysis } = require('@perfsense/ai-provider');
-      const gitContext = { commit: 'HEAD', message: '', author: '', filesChanged: [] };
+      const gitContext = { commit: 'HEAD', message: '', author: '', filesChanged: [] as string[] };
+      if (repoDir) {
+        try {
+          const { execSync } = require('child_process');
+          const log = execSync('git log -1 --format=%H%n%s%n%an HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim().split('\n');
+          gitContext.commit = log[0] || 'HEAD';
+          gitContext.message = log[1] || '';
+          gitContext.author = log[2] || '';
+          const files = execSync('git diff --name-only HEAD~1 HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
+          gitContext.filesChanged = files ? files.split('\n') : [];
+        } catch { /* best-effort: git context is supplementary to the correlation data */ }
+      }
       const effectiveApiKey = apiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
       if (effectiveApiKey || aiProvider === 'ollama') {
         const aiResult = await generateAIAnalysis(correlation, gitContext, {
