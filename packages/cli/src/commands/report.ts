@@ -240,7 +240,9 @@ export async function run(argv: string[]): Promise<void> {
         const aiResult = await generateAIAnalysis(correlation, gitContext, {
           provider: aiProvider as any,
           apiKey: effectiveApiKey,
-          model: aiModel || 'gpt-4o-mini',
+          // Ollama has no API key and uses a local model (llama3); the hosted
+          // providers fall back to a small chat model.
+          model: aiModel || (aiProvider === 'ollama' ? 'llama3' : 'gpt-4o-mini'),
         });
         if (aiResult) {
           aiAnalysis = aiResult.explanation;
