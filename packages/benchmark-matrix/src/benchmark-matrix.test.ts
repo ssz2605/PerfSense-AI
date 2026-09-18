@@ -30,8 +30,8 @@ describe('Benchmark Matrix contract', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
     expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime']);
     expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError', 'scheduleCount']);
-    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth', 'maxLogicalDepth']);
-    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'maxDepth', 'blocksExecuted', 'maxLogicalDepth']);
+    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxLogicalDepth']);
+    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'blocksExecuted', 'maxLogicalDepth']);
     expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
   });
 
@@ -60,9 +60,13 @@ describe('Benchmark Matrix contract', () => {
     expect(getFixtureContract('RAINBOWCONNECTION.HTML')?.displayName).toBe('Rainbow Connection');
   });
 
-  it('marks maxDepth as unverified for the fixtures that contain it', () => {
-    expect(isMetricUnverified('musical-tree.html', 'maxDepth')).toBe(true);
-    expect(isMetricUnverified('ascending-notes-color-spiral.html', 'maxDepth')).toBe(true);
+  it('no longer exposes maxDepth anywhere in the matrix', () => {
+    // maxDepth was removed from the approved matrix entirely: it is neither
+    // approved nor unverified for any fixture.
+    expect(isMetricApproved('musical-tree.html', 'maxDepth')).toBe(false);
+    expect(isMetricApproved('ascending-notes-color-spiral.html', 'maxDepth')).toBe(false);
+    expect(isMetricUnverified('musical-tree.html', 'maxDepth')).toBe(false);
+    expect(isMetricUnverified('ascending-notes-color-spiral.html', 'maxDepth')).toBe(false);
     expect(isMetricUnverified('musical-tree.html', 'maxQueueDepth')).toBe(false);
     expect(isMetricUnverified('RainbowConnection.html', 'exportMIDITime')).toBe(false);
   });
@@ -77,7 +81,7 @@ describe('Benchmark Matrix contract', () => {
     // Frère Jacques owns a verified count metric: scheduleCount is analyzed but
     // guarded by the seam tripwire, so it is not capped at warning.
     expect(isMetricWarnOnly('Frere-Jacques.html', 'scheduleCount')).toBe(false);
-    // The exact recursion metric is verified for its fixtures (unlike maxDepth).
+    // The exact recursion metric is verified for its fixtures.
     expect(isMetricWarnOnly('musical-tree.html', 'maxLogicalDepth')).toBe(false);
     expect(isMetricWarnOnly('ascending-notes-color-spiral.html', 'maxLogicalDepth')).toBe(false);
     // Rainbow no longer lists the memory metrics: not approved here means not
@@ -101,7 +105,7 @@ describe('Benchmark Matrix contract', () => {
       'bootstrapTotal', 'initTotal', 'heapAfterBoot',
       'projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime',
       'callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError',
-      'maxQueueDepth', 'executionTime', 'blocksExecuted', 'maxDepth',
+      'maxQueueDepth', 'executionTime', 'blocksExecuted',
       'maxLogicalDepth',
       'memoryDelta', 'retainedHeap', 'scheduleLagMean', 'scheduleLagMax',
       'scheduleCount',
@@ -124,7 +128,7 @@ describe('Benchmark Matrix contract', () => {
     // Heap is captured in bytes and presented in MB.
     expect(formatMetricValue(47400000, 'heapAfterBoot')).toBe('47.4 MB');
     expect(formatMetricValue(0, 'memoryDelta')).toBe('0 B');
-    expect(formatMetricValue(1, 'maxDepth')).toBe('1');
+    expect(formatMetricValue(1, 'maxQueueDepth')).toBe('1');
     expect(formatMetricValue(254, 'maxLogicalDepth')).toBe('254');
     expect(formatMetricValue(268, 'scheduleCount')).toBe('268');
     expect(formatMetricValue(42, 'blocksExecuted')).toBe('42');

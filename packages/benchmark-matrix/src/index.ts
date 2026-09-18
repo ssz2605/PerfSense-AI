@@ -32,23 +32,6 @@ export interface FixtureContract {
 }
 
 export const BENCHMARK_MATRIX: FixtureContract[] = [
-  // ── maxDepth status (sanity/unverified) ──────────────────────────────
-  // The maxDepth probe currently wraps `logo.runFromBlockNow` and records the
-  // peak synchronous JS-call nesting of that single interpreter function, NOT
-  // logical (program-level) action recursion:
-  //   * flat sequential programs recurse one JS frame per flow step up to the
-  //     interpreter's yield cap (~1000), so maxDepth tracks interpreter stack
-  //     growth, not program structure;
-  //   * logical recursion via do/doArg/action stacks is realized ITERATIVELY
-  //     through the turtle queue (visible in maxQueueDepth), so it never adds
-  //     runFromBlockNow nesting;
-  //   * value-expression nesting (parseArg) never enters runFromBlockNow.
-  // Correct instrumentation for a logical recursion-depth metric must count
-  // logical action entry/exit in the app's action engine (increment on nested
-  // action call, decrement on completion/return, exception-safe, reset per
-  // measured run). TODO(implementation boundary): implement that app-side seam
-  // before treating maxDepth as a reliable regression signal; until then the
-  // report renders it as "Unverified" and never as a regression.
   {
     fixture: 'index.html',
     displayName: 'index.html (bootstrap)',
@@ -77,12 +60,9 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'musical-tree.html',
     displayName: 'musical-tree',
-    metrics: ['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxDepth', 'maxLogicalDepth'],
-    // maxDepth measures JS-call nesting of runFromBlockNow (= 1), not logical
-    // recursion; retained as Unverified for visibility. maxLogicalDepth is the
-    // exact program-level depth (queue + parentFlowQueue) per executed block —
-    // the true recursion metric.
-    unverified: ['maxDepth'],
+    metrics: ['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxLogicalDepth'],
+    // maxLogicalDepth is the exact program-level depth (queue + parentFlowQueue)
+    // per executed block — the true recursion metric.
     // Memory stays warn-only (real values now, but CI-heap noise is hard to
     // characterize): it can warn but never post a hard REGRESSION.
     warnOnly: ['memoryDelta', 'retainedHeap'],
@@ -90,8 +70,7 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'ascending-notes-color-spiral.html',
     displayName: 'ascending-notes-color-spiral',
-    metrics: ['executionTime', 'maxDepth', 'blocksExecuted', 'maxLogicalDepth'],
-    unverified: ['maxDepth'],
+    metrics: ['executionTime', 'blocksExecuted', 'maxLogicalDepth'],
     warnOnly: [],
   },
   {
@@ -122,7 +101,6 @@ const METRIC_UNITS: Record<string, string> = {
   scheduleLagMax: 'ms',
   executionTime: 'ms',
   maxQueueDepth: 'count',
-  maxDepth: 'count',
   maxLogicalDepth: 'count',
   scheduleCount: 'count',
   blocksExecuted: 'count',

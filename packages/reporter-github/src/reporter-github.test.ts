@@ -159,7 +159,7 @@ describe('summary statuses and compact details', () => {
     expect(comment).toContain('### index.html (bootstrap)');
   });
 
-  it('marks maxDepth as Unverified and excludes it from regressions', () => {
+  it('filters retired maxDepth out of the report entirely', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'musical-tree.html', metric: 'maxDepth', status: 'REGRESSION', deltaPercent: 200, baselineMedian: 1, currentMedian: 3 }),
@@ -168,9 +168,10 @@ describe('summary statuses and compact details', () => {
       summary: { pass: 1, warning: 0, regression: 1, failed: true },
     };
     const comment = generatePRComment(result, PR_27);
-    expect(comment).toContain('| maxDepth | 1 | 3 | +200.0% | Unverified |');
-    // Not treated as a genuine regression: no detail block, no red overall.
-    expect(comment).not.toContain('### maxDepth');
+    // maxDepth is no longer part of the approved matrix, so it never renders
+    // (not even as Unverified) and cannot influence the overall verdict.
+    expect(comment).not.toContain('maxDepth');
+    expect(comment).toContain('| executionTime');
     expect(comment).toContain('🟢 No significant regression');
   });
 

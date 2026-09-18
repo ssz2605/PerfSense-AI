@@ -279,7 +279,6 @@ describe("GitHub Action E2E", () => {
           "maxQueueDepth",
           "memoryDelta",
           "retainedHeap",
-          "maxDepth",
         ],
       };
       const configPath = path.join(workDir, "perfsense.config.json");
@@ -299,7 +298,6 @@ describe("GitHub Action E2E", () => {
       // All three phases ran on the page; musical-tree approved metrics flowed.
       expect(run0.executionTime).toBeTypeOf("number");
       expect(run0.maxQueueDepth).toBeTypeOf("number");
-      expect(run0.maxDepth).toBeGreaterThan(0);
       expect(run0.memoryDelta).toBeDefined();
       expect(run0.retainedHeap).toBeDefined();
       // Phase metrics not approved for musical-tree were rejected at collection.
