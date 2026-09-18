@@ -255,6 +255,37 @@ describe('AI reasoning / root cause', () => {
     expect(comment).toContain('**Likely cause:** No likely cause identified.');
   });
 
+  it('renders the per-metric AI explanation instead of "No likely cause identified."', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'REGRESSION', deltaPercent: 39.8, baselineMedian: 5370.5, currentMedian: 7508.7 }),
+      ],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
+      correlation: makeCorrelation('bootstrapTotal', null),
+    };
+    const comment = generatePRComment(result, {
+      ...PR_27,
+      aiPerMetric: {
+        bootstrapTotal: 'The 2000ms loader deferral in js/loader.js delays bootstrapTotal by ~2000ms, matching the +39.8% increase.',
+      },
+    });
+    expect(comment).not.toContain('**Likely cause:** No likely cause identified.');
+    expect(comment).toContain('**AI analysis:**');
+    expect(comment).toContain('The 2000ms loader deferral in js/loader.js delays bootstrapTotal by ~2000ms');
+  });
+
+  it('keeps "No likely cause identified." when the per-metric AI text is missing', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'REGRESSION', deltaPercent: 39.8, baselineMedian: 5370.5, currentMedian: 7508.7 }),
+      ],
+      summary: { pass: 0, warning: 0, regression: 1, failed: true },
+      correlation: makeCorrelation('bootstrapTotal', null),
+    };
+    const comment = generatePRComment(result, { ...PR_27, aiPerMetric: {} });
+    expect(comment).toContain('**Likely cause:** No likely cause identified.');
+  });
+
   it('renders a top-level AI analysis section when aiAnalysis is provided', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],

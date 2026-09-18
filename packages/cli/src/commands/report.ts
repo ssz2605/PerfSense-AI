@@ -220,6 +220,7 @@ export async function run(argv: string[]): Promise<void> {
 
   // Run AI analysis if provider configured
   let aiAnalysis: string | undefined;
+  let aiPerMetric: Record<string, string> | undefined;
   if (hasRegression && correlation && aiProvider) {
     try {
       const { generateAIAnalysis } = require('@perfsense/ai-provider');
@@ -236,16 +237,46 @@ export async function run(argv: string[]): Promise<void> {
         } catch { /* best-effort: git context is supplementary to the correlation data */ }
       }
       const effectiveApiKey = apiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
+      const aiConfig = {
+        provider: aiProvider as any,
+        apiKey: effectiveApiKey,
+        // Ollama has no API key and uses a local model (llama3); the hosted
+        // providers fall back to a small chat model.
+        model: aiModel || (aiProvider === 'ollama' ? 'llama3' : 'gpt-4o-mini'),
+      };
       if (effectiveApiKey || aiProvider === 'ollama') {
-        const aiResult = await generateAIAnalysis(correlation, gitContext, {
-          provider: aiProvider as any,
-          apiKey: effectiveApiKey,
-          // Ollama has no API key and uses a local model (llama3); the hosted
-          // providers fall back to a small chat model.
-          model: aiModel || (aiProvider === 'ollama' ? 'llama3' : 'gpt-4o-mini'),
-        });
+        const aiResult = await generateAIAnalysis(correlation, gitContext, aiConfig);
         if (aiResult) {
           aiAnalysis = aiResult.explanation;
+        }
+
+        // The deterministic engine may have no cause for some metrics
+        // (e.g. bootstrapTotal/initTotal). Ask the AI for a focused
+        // per-metric explanation so the report can fill those gaps.
+        // Skip metrics already explained by a shared cross-metric cause;
+        // the reporter renders that cause directly.
+        const perMetric: Record<string, string> = {};
+        for (const [metric, mc] of Object.entries(correlation.metrics)) {
+          if (mc.likelyCause) continue;
+          const hasSharedCause = correlation.crossMetricCauses.some((c) =>
+            c.affectedMetrics.some((m) => m.toLowerCase() === metric.toLowerCase()),
+          );
+          if (hasSharedCause) continue;
+          try {
+            const focused = await generateAIAnalysis(
+              {
+                metrics: { [metric]: mc },
+                crossMetricCauses: [],
+                summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 1 },
+              },
+              gitContext,
+              aiConfig,
+            );
+            if (focused) perMetric[metric] = focused.explanation;
+          } catch { /* per-metric AI failed silently; the block falls back to "No likely cause." */ }
+        }
+        if (Object.keys(perMetric).length > 0) {
+          aiPerMetric = perMetric;
         }
       }
     } catch {
@@ -267,13 +298,14 @@ export async function run(argv: string[]): Promise<void> {
   };
 
   // Generate PR comment
-  const comment = generatePRComment(checkResult, { ...reportOptions, aiAnalysis });
+  const comment = generatePRComment(checkResult, { ...reportOptions, aiAnalysis, aiPerMetric });
 
   if (formatJson) {
     const report = {
       check: checkResult,
       correlation,
       aiAnalysis,
+      aiPerMetric,
       prComment: comment,
     };
     console.log(JSON.stringify(report, null, 2));

@@ -43,6 +43,9 @@ export interface PRReportOptions {
   matrix?: string;
   /** Optional free-form AI analysis (collapsed section). */
   aiAnalysis?: string;
+  /** Per-metric AI explanations, keyed by metric name, shown in each metric's
+   *  detail block when the deterministic engine has no likely cause. */
+  aiPerMetric?: Record<string, string>;
 }
 
 /** Professional status words used in the full metrics table (no emojis). */
@@ -101,6 +104,7 @@ function fixtureTable(entries: CheckResultEntry[]): string[] {
 function causeLines(
   entry: CheckResultEntry,
   correlation: CorrelationResult | undefined,
+  aiPerMetric?: Record<string, string>,
 ): string[] {
   const lines: string[] = [];
   lines.push(`Baseline: ${formatMetricValue(entry.baselineMedian, entry.metric)} | Current: ${formatMetricValue(entry.currentMedian, entry.metric)}`);
@@ -127,6 +131,17 @@ function causeLines(
     lines.push(
       `${cmc.description} This source affects ${cmc.affectedMetrics.join(', ')} and is shared across those metrics.`,
     );
+    lines.push('');
+    return lines;
+  }
+
+  // The deterministic engine found no cause — fall back to the per-metric
+  // AI explanation when one was produced, so the block still explains why
+  // the metric regressed instead of stopping at "No likely cause."
+  const aiText = aiPerMetric ? aiPerMetric[entry.metric] : undefined;
+  if (aiText) {
+    lines.push('**AI analysis:**');
+    lines.push(aiText);
     lines.push('');
     return lines;
   }
@@ -190,11 +205,12 @@ function detailBlock(
   entry: CheckResultEntry,
   correlation: CorrelationResult | undefined,
   icon: string,
+  aiPerMetric?: Record<string, string>,
 ): string[] {
   const lines: string[] = [];
   lines.push(`${icon} **${entry.metric}** — ${formatDeltaPercent(entry.deltaPercent)}`);
   lines.push('');
-  lines.push(...causeLines(entry, correlation));
+  lines.push(...causeLines(entry, correlation, aiPerMetric));
   return lines;
 }
 
@@ -265,9 +281,9 @@ export function generatePRComment(
     lines.push('');
     for (const entry of notable) {
       if (entry.status === 'REGRESSION') {
-        lines.push(...detailBlock(entry, result.correlation, '🔴'));
+        lines.push(...detailBlock(entry, result.correlation, '🔴', options.aiPerMetric));
       } else {
-        lines.push(...detailBlock(entry, result.correlation, '🟢'));
+        lines.push(...detailBlock(entry, result.correlation, '🟢', options.aiPerMetric));
       }
     }
   }
