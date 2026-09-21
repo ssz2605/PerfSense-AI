@@ -240,9 +240,9 @@ export async function run(argv: string[]): Promise<void> {
       const aiConfig = {
         provider: aiProvider as any,
         apiKey: effectiveApiKey,
-        // Ollama has no API key and uses a local model (llama3); the hosted
+        // Ollama has no API key and uses a local model (llama3.1); the hosted
         // providers fall back to a small chat model.
-        model: aiModel || (aiProvider === 'ollama' ? 'llama3' : 'gpt-4o-mini'),
+        model: aiModel || (aiProvider === 'ollama' ? 'llama3.1:8b' : 'gpt-4o-mini'),
       };
       if (effectiveApiKey || aiProvider === 'ollama') {
         const aiResult = await generateAIAnalysis(correlation, gitContext, aiConfig);

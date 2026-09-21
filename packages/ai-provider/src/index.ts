@@ -33,7 +33,7 @@ export interface AIProviderConfig {
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   openai: 'gpt-4o-mini',
   anthropic: 'claude-3-haiku-20240307',
-  ollama: 'llama3',
+  ollama: 'llama3.1:8b',
 };
 
 function loadPromptTemplate(name: string): string {
@@ -125,9 +125,43 @@ async function callAnthropic(
   return parseAIResponse(content);
 }
 
+export function buildOllamaUserMessage(input: AIInput): string {
+  // Small local models follow the user turn far more reliably than the system
+  // prompt, so repeat a compact data summary here instead of relying on the
+  // system message alone. This prevents responses like "I don't see any data".
+  const lines: string[] = [];
+  const summary = input.correlation.summary;
+  if (summary) {
+    lines.push(
+      `Summary: ${summary.totalRegressions} regression(s); ${summary.metricsWithCause} with a deterministic cause; ${summary.metricsInconclusive} without one.`,
+    );
+  }
+  for (const [metric, m] of Object.entries(input.correlation.metrics)) {
+    const r = m.regression;
+    if (!r) continue;
+    lines.push(
+      `- ${metric}: ${r.deltaPercent > 0 ? '+' : ''}${r.deltaPercent.toFixed(1)}% ` +
+        `(baseline ${r.baselineMedian} -> current ${r.currentMedian}) ` +
+        `p=${r.pValue.toFixed(3)} effect=${r.effectSize.toFixed(2)}`,
+    );
+  }
+  const cross = input.correlation.crossMetricCauses;
+  if (cross.length > 0) {
+    lines.push(`Cross-metric causes: ${JSON.stringify(cross)}`);
+  }
+  if (input.gitContext.filesChanged.length > 0) {
+    lines.push(`Files changed in this PR: ${input.gitContext.filesChanged.join(', ')}`);
+  }
+  lines.push(
+    'Analyze the regression data above now. Do not ask the user for more data.',
+  );
+  return lines.join('\n');
+}
+
 async function callOllama(
   systemPrompt: string,
   config: AIProviderConfig,
+  input: AIInput,
 ): Promise<AIOutput> {
   const baseUrl = config.baseUrl || 'http://localhost:11434';
   const response = await fetch(`${baseUrl}/api/chat`, {
@@ -137,7 +171,7 @@ async function callOllama(
       model: config.model || DEFAULT_MODELS.ollama,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: 'Analyze the regression data and provide optimization suggestions.' },
+        { role: 'user', content: buildOllamaUserMessage(input) },
       ],
       stream: false,
     }),
@@ -180,7 +214,7 @@ export async function analyzeRegression(
     case 'anthropic':
       return callAnthropic(systemPrompt, config);
     case 'ollama':
-      return callOllama(systemPrompt, config);
+      return callOllama(systemPrompt, config, input);
     default:
       throw new Error(`Unsupported AI provider: ${config.provider}`);
   }

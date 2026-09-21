@@ -292,8 +292,8 @@ export function generatePRComment(
     lines.push('');
   }
 
-  // ── Full approved metrics (collapsible) ──────────────────────────────
-  lines.push('<details>');
+  // ── Full approved metrics (open by default) ───────────────────────────
+  lines.push('<details open>');
   lines.push('<summary>All approved metrics</summary>');
   lines.push('');
   for (const view of views) {

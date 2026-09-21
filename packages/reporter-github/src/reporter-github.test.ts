@@ -151,7 +151,7 @@ describe('summary statuses and compact details', () => {
       summary: { pass: 2, warning: 0, regression: 0, failed: false },
     };
     const comment = generatePRComment(result, PR_27);
-    const details = comment.split('## Details')[1].split('<details>')[0];
+    const details = comment.split('## Details')[1].split('<details')[0];
     expect(details).not.toContain('### Rainbow Connection');
     expect(details).toContain('No regressions or meaningful improvements detected.');
     // Both fixtures still appear in the collapsible section.
@@ -202,7 +202,7 @@ describe('report structure', () => {
     expect(comment).toContain('Matrix: Music Blocks Benchmark Matrix');
     const checkIdx = comment.indexOf('## Performance Check');
     const detailsIdx = comment.indexOf('## Details');
-    const fullIdx = comment.indexOf('<details>');
+    const fullIdx = comment.indexOf('<details');
     const artifactsIdx = comment.indexOf('## Artifacts');
     expect(checkIdx).toBeGreaterThan(-1);
     expect(detailsIdx).toBeGreaterThan(checkIdx);
