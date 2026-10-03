@@ -53,7 +53,7 @@ function makeBaseline(): BaselineData {
 describe('buildContract', () => {
   it('counts expected/collected/valid/compared and surfaces baseline holes', () => {
     const contract = buildContract(makeResults(), makeBaseline());
-    expect(contract.expected).toBe(22);
+    expect(contract.expected).toBe(28);
     expect(contract.collected).toBeGreaterThanOrEqual(3);
     expect(contract.valid).toBeGreaterThanOrEqual(3);
     expect(contract.missing).toBeGreaterThan(0);

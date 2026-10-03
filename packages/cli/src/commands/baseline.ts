@@ -3,13 +3,15 @@ import fs from 'fs';
 import type { PageResult, BaselineData, BaselineMetricStatsV2, StabilityTier } from '@perfsense/core';
 import { median, percentile, mean, stdDev, mad, coefficientOfVariation, stabilityTier } from '@perfsense/statistics';
 import { isKnownFixture, isMetricApproved } from '@perfsense/benchmark-matrix';
-import { computeEnvironmentFingerprint } from './env';
+import { computeEnvironmentFingerprint, resolveBaselineHarness } from './env';
+import { runValidate } from './validate';
 
 function printUsage(): void {
   console.log(
     'Usage:\n' +
     '  perfsense baseline save --from <results.json> --out <baseline.json> [--commit <sha>] [--warmup <n>]\n' +
-    '  perfsense baseline load --file <baseline.json>\n'
+    '  perfsense baseline load --file <baseline.json>\n' +
+      '  perfsense baseline validate --baseline <file> [--previous <file>] [--config <file>] [--format json]\n'
   );
 }
 
@@ -134,6 +136,10 @@ export function save(argv: string[]): void {
     pages,
     source: fromFile,
     commitSHA,
+    // Which harness produced this file. Stamped from the workflow-level
+    // PERFSENSE_REF so a later comparison can refuse to read across two
+    // different revisions of the measuring code.
+    harness: resolveBaselineHarness(),
     env: computeEnvironmentFingerprint(),
   };
 
@@ -185,6 +191,10 @@ export function run(argv: string[]): void {
     save(rest);
   } else if (subcommand === 'load') {
     load(rest);
+  } else if (subcommand === 'validate') {
+    // A non-zero exit is the point: the workflow runs this between saving and
+    // committing so an untrustworthy capture never reaches the baseline branch.
+    process.exit(runValidate(rest));
   } else {
     console.error(`Unknown baseline subcommand: ${subcommand}`);
     printUsage();

@@ -29,19 +29,36 @@ describe('Benchmark Matrix contract', () => {
   it('defines the approved metric sets per fixture', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
     expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime']);
-    expect(getApprovedMetrics('Frere-Jacques.html')).toEqual(['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError', 'scheduleCount']);
+    expect(getApprovedMetrics('Frere-Jacques.html')).toEqual([
+      'callbackLatencyMean',
+      'callbackLatencyMax',
+      'cumulativeDrift',
+      'voiceOnsetError',
+      'scheduleCount',
+      'executionTime',
+      'blocksExecuted',
+      'maxQueueDepth',
+    ]);
     expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxLogicalDepth']);
     expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'blocksExecuted', 'maxLogicalDepth']);
-    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
+    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual([
+      'scheduleLagMean',
+      'scheduleLagMax',
+      'executionTime',
+      'blocksExecuted',
+      'maxQueueDepth',
+    ]);
   });
 
   it('rejects metrics that are not part of the matrix for a fixture', () => {
-    // Frère Jacques must not show unrelated metrics.
+    // Frère Jacques owns interpreter + voice timing, but not load/save/export,
+    // not memory (musical-tree's double-run records it) and not recursion
+    // depth (the three fixtures that own it do so explicitly).
     expect(isMetricApproved('Frere-Jacques.html', 'projectLoadTime')).toBe(false);
-    expect(isMetricApproved('Frere-Jacques.html', 'executionTime')).toBe(false);
-    expect(isMetricApproved('Frere-Jacques.html', 'maxQueueDepth')).toBe(false);
-    expect(isMetricApproved('Frere-Jacques.html', 'blocksExecuted')).toBe(false);
+    expect(isMetricApproved('Frere-Jacques.html', 'saveTime')).toBe(false);
     expect(isMetricApproved('Frere-Jacques.html', 'maxDepth')).toBe(false);
+    expect(isMetricApproved('Frere-Jacques.html', 'maxActionDepth')).toBe(false);
+    expect(isMetricApproved('Frere-Jacques.html', 'maxLogicalDepth')).toBe(false);
     expect(isMetricApproved('Frere-Jacques.html', 'memoryDelta')).toBe(false);
     expect(isMetricApproved('Frere-Jacques.html', 'retainedHeap')).toBe(false);
     // Rainbow owns load/save/export only; the memory metrics belong to
@@ -50,8 +67,11 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricApproved('RainbowConnection.html', 'retainedHeap')).toBe(false);
     // maxActionDepth is not in the approved matrix anywhere.
     expect(isMetricApproved('musical-tree.html', 'maxActionDepth')).toBe(false);
-    // crabcanon-plot only exposes its two schedule-lag metrics.
-    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
+    // crabcanon-plot keeps its own lag probes and now also reports interpreter
+    // cost, but it does not own voice timing or recursion depth.
+    expect(isMetricApproved('crabcanon-plot.html', 'callbackLatencyMean')).toBe(false);
+    expect(isMetricApproved('crabcanon-plot.html', 'maxLogicalDepth')).toBe(false);
+    expect(isMetricApproved('crabcanon-plot.html', 'memoryDelta')).toBe(false);
   });
 
   it('is case-insensitive for fixture and metric names', () => {
@@ -81,6 +101,11 @@ describe('Benchmark Matrix contract', () => {
     // Frère Jacques owns a verified count metric: scheduleCount is analyzed but
     // guarded by the seam tripwire, so it is not capped at warning.
     expect(isMetricWarnOnly('Frere-Jacques.html', 'scheduleCount')).toBe(false);
+    // The interpreter metrics Frère now owns are real measurements, not probes
+    // awaiting characterization, so they are not capped.
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'executionTime')).toBe(false);
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'blocksExecuted')).toBe(false);
+    expect(isMetricWarnOnly('Frere-Jacques.html', 'maxQueueDepth')).toBe(false);
     // The exact recursion metric is verified for its fixtures.
     expect(isMetricWarnOnly('musical-tree.html', 'maxLogicalDepth')).toBe(false);
     expect(isMetricWarnOnly('ascending-notes-color-spiral.html', 'maxLogicalDepth')).toBe(false);
@@ -91,8 +116,13 @@ describe('Benchmark Matrix contract', () => {
     // Verified metrics are not warn-only, and neither is scheduleLag.
     expect(isMetricWarnOnly('index.html', 'bootstrapTotal')).toBe(false);
     expect(isMetricWarnOnly('RainbowConnection.html', 'projectLoadTime')).toBe(false);
-    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMean')).toBe(false);
-    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMax')).toBe(false);
+    // The crabcanon lag probes sit at ~1e-11 ms, below timer resolution, so they
+    // may inform but never fail a PR on their own. Its interpreter metrics are
+    // the ones with real values.
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMean')).toBe(true);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMax')).toBe(true);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'executionTime')).toBe(false);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'blocksExecuted')).toBe(false);
     // A metric listed only in another fixture's set is not simply warn-only:
     // it is not approved at all for this fixture.
     expect(isMetricApproved('index.html', 'memoryDelta')).toBe(false);

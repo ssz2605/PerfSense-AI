@@ -73,6 +73,8 @@ describe('matrix filtering', () => {
         // Not part of the approved Frère Jacques matrix — must not appear.
         makeEntry({ page: 'Frere-Jacques.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7, baselineMedian: 8959, currentMedian: 11977 }),
         makeEntry({ page: 'Frere-Jacques.html', metric: 'executionTime', status: 'REGRESSION', deltaPercent: 9.9, baselineMedian: 100, currentMedian: 110 }),
+        // Recursion depth belongs to the three fixtures that own it explicitly.
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'maxLogicalDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
         makeEntry({ page: 'Frere-Jacques.html', metric: 'maxActionDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
         makeEntry({ page: 'crabcanon-plot.html', metric: 'scheduleLagMean', status: 'PASS', deltaPercent: -2, baselineMedian: 12, currentMedian: 11.8 }),
         // Extra raw metric that is not part of the crabcanon matrix.
@@ -84,8 +86,10 @@ describe('matrix filtering', () => {
 
     expect(comment).toContain('callbackLatencyMean');
     expect(comment).toContain('scheduleLagMean');
+    // Frère now owns executionTime, so it must reach the report.
+    expect(comment).toContain('executionTime');
     expect(comment).not.toContain('projectLoadTime');
-    expect(comment).not.toContain('executionTime');
+    expect(comment).not.toContain('maxLogicalDepth');
     expect(comment).not.toContain('maxActionDepth');
     expect(comment).not.toContain('retainedHeap');
   });

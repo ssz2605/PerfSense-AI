@@ -53,7 +53,20 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'Frere-Jacques.html',
     displayName: 'Frère Jacques',
-    metrics: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError', 'scheduleCount'],
+    // Frère runs playToCompletion like the other execution fixtures, so the
+    // interpreter metrics are collected here too — the matrix was the only
+    // thing hiding them. Without them this fixture reports voice timing only,
+    // which cannot detect a scheduler change that alters block dispatch.
+    metrics: [
+      'callbackLatencyMean',
+      'callbackLatencyMax',
+      'cumulativeDrift',
+      'voiceOnsetError',
+      'scheduleCount',
+      'executionTime',
+      'blocksExecuted',
+      'maxQueueDepth',
+    ],
     unverified: [],
     warnOnly: ['callbackLatencyMean', 'callbackLatencyMax', 'cumulativeDrift', 'voiceOnsetError'],
   },
@@ -76,9 +89,21 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: 'crabcanon-plot.html',
     displayName: 'crabcanon-plot',
-    metrics: ['scheduleLagMean', 'scheduleLagMax'],
+    // crabcanon-plot is the deepest fixture in the suite (2078 blocks executed
+    // in the Sep 2026 capture). Holding it to two scheduler-lag probes whose
+    // values are ~1e-11 ms made its PASS vacuous: nothing with real resolution
+    // was being checked. The interpreter metrics below give it teeth.
+    metrics: [
+      'scheduleLagMean',
+      'scheduleLagMax',
+      'executionTime',
+      'blocksExecuted',
+      'maxQueueDepth',
+    ],
     unverified: [],
-    warnOnly: [],
+    // The lag probes stay warn-only: at ~1e-11 ms they sit below timer
+    // resolution, so they can inform but never fail a PR on their own.
+    warnOnly: ['scheduleLagMean', 'scheduleLagMax'],
   },
 ];
 

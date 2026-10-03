@@ -9,7 +9,7 @@ import { correlate, focusCorrelation, type CorrelationResult, type RegressionEnt
 import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { generatePRComment, type CheckResult, type CheckResultEntry, type PRReportOptions } from '@perfsense/reporter-github';
 import { buildContract } from './contract';
-import { computeEnvironmentFingerprint, baselineEnvironment, environmentsMatch, baselineAgeDays } from './env';
+import { computeEnvironmentFingerprint, baselineEnvironment, environmentsMatch, baselineAgeDays, currentHarnessRef, harnessComparability } from './env';
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
@@ -17,7 +17,7 @@ const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   LCP: { warning: 5, fail: 10 },
 };
 
-function loadConfig(configPath?: string): PerfSenseConfig | null {
+export function loadConfig(configPath?: string): PerfSenseConfig | null {
   const searchPaths: string[] = configPath
     ? [path.resolve(configPath)]
     : [path.resolve('perfsense.config.json')];
@@ -120,6 +120,21 @@ export async function run(argv: string[]): Promise<void> {
   const ageDays = baselineAgeDays(baseline);
   const baselineStale = ageDays !== null && ageDays > maxFreshDays;
 
+  // ── Harness gate ──────────────────────────────────────────────────────
+  // Unlike the freshness and environment gates, a harness mismatch cannot be
+  // caveated: two PerfSense revisions can collect different metric sets and
+  // time the same metric differently, so a delta between them measures the
+  // measuring code, not the code under test. Every comparison is therefore
+  // withheld rather than reported with a warning attached.
+  const baselineHarnessRef = baseline.harness?.ref ?? null;
+  const runHarnessRef = currentHarnessRef();
+  const harnessState = harnessComparability(baseline, runHarnessRef);
+  const harnessMismatch = harnessState === 'mismatch';
+  const harnessNote = harnessMismatch
+    ? `baseline was captured with PerfSense ${baselineHarnessRef}, this run used ${runHarnessRef}; ` +
+      'the two sides measure differently, so no verdict is issued'
+    : null;
+
   const allResults: CheckResultEntry[] = [];
   let hasRegression = false;
   let hasWarning = false;
@@ -180,15 +195,36 @@ export async function run(argv: string[]): Promise<void> {
       const currentMedian = median(currentValues);
       const baselineMedian = baselineStats.median;
       const deltaPercent = computeDeltaPercent(baselineMedian, currentMedian);
+      // v2 baselines carry an explicit CV; legacy v1 baselines leave it
+      // undefined so the classifier derives it from the sample values.
+      const storedCv = (baselineStats as { cv?: unknown }).cv;
+      const storedBaselineCv = typeof storedCv === 'number' && isFinite(storedCv) ? storedCv : undefined;
 
       let entry: CheckResultEntry;
-      if (baselineValues && baselineValues.length > 0) {
-        // v2 baselines carry an explicit CV; legacy v1 baselines leave it
-        // undefined so the classifier derives it from the sample values.
-        const storedCv = (baselineStats as { cv?: unknown }).cv;
-        const baselineCv = typeof storedCv === 'number' && isFinite(storedCv)
-          ? storedCv
-          : undefined;
+      if (harnessMismatch) {
+        // Withhold the verdict entirely. The delta is still computed and shown
+        // so the number is visible, but nothing is asserted about it.
+        entry = {
+          page: pageName,
+          metric,
+          status: 'INCONCLUSIVE',
+          deltaPercent,
+          absDelta: currentMedian - baselineMedian,
+          baselineMedian,
+          currentMedian,
+          failThreshold: threshold.fail,
+          pValue: null,
+          effectSize: null,
+          effectZ: null,
+          confidenceInterval: null,
+          baselineCV: typeof storedBaselineCv === 'number' ? storedBaselineCv : null,
+          stabilityTier: null,
+          envMatched,
+          baselineAgeDays: ageDays,
+          note: harnessNote,
+        };
+      } else if (baselineValues && baselineValues.length > 0) {
+        const baselineCv = storedBaselineCv;
         const cls = classifyChange(
           baselineValues,
           currentValues,
@@ -411,6 +447,11 @@ export async function run(argv: string[]): Promise<void> {
       ageDays,
       stale: baselineStale,
       hasEnv: baselineEnv !== null,
+      harness: {
+        baselineRef: baselineHarnessRef,
+        runRef: runHarnessRef,
+        state: harnessState,
+      },
     },
   };
 
@@ -428,7 +469,13 @@ export async function run(argv: string[]): Promise<void> {
       aiAnalysis,
       aiPerMetric,
       aiNeeded,
-      baseline: { envMatched, ageDays, stale: baselineStale, hasEnv: baselineEnv !== null },
+      baseline: {
+        envMatched,
+        ageDays,
+        stale: baselineStale,
+        hasEnv: baselineEnv !== null,
+        harness: { baselineRef: baselineHarnessRef, runRef: runHarnessRef, state: harnessState },
+      },
       prComment: comment,
     };
     console.log(JSON.stringify(report, null, 2));

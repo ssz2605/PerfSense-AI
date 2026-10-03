@@ -68,6 +68,16 @@ export interface BaselinePage {
   [metricName: string]: BaselineMetricStatsV2;
 }
 
+/** cgroup CPU quota, the signal that distinguishes a busy runner from a slow change. */
+export interface CpuThrottle {
+  /** Quota expressed in cores (cgroup v2 `cpu.max`, or v1 quota/period). Null when unrestricted or unreadable. */
+  quotaCpus: number | null;
+  /** True when the quota is below the visible core count. Null when the quota is unknown. */
+  throttled: boolean | null;
+  /** Where the numbers came from, for auditability. */
+  source: "cgroup-v2" | "cgroup-v1" | "unavailable";
+}
+
 /** Environment fingerprint used for the baseline↔current environment gate. */
 export interface EnvironmentFingerprint {
   os: string;
@@ -78,7 +88,22 @@ export interface EnvironmentFingerprint {
   memoryGB: number;
   runner?: string;
   coldState: boolean;
+  /** 1-minute load average at capture time. Omitted where the platform does not report it. */
+  loadAvg1m?: number;
+  /** CPU quota of the current cgroup. Omitted when it cannot be read. */
+  cpuQuota?: CpuThrottle;
 }
+
+/**
+ * Which PerfSense revision produced a baseline. Recorded so a comparison can
+ * refuse to run across two different harnesses: the two sides can collect
+ * different metric sets and measure the same metric differently, so a delta
+ * between them is not a measurement of the code.
+ */
+export type BaselineHarness =
+  | { ref: string; source: "PERFSENSE_REF" }
+  /** Captured outside the workflow, so the revision is genuinely unknown — not the same as "old harness". */
+  | { ref: null; source: "unavailable"; reason: string };
 
 export interface BaselineData {
   schema: string;
@@ -89,11 +114,45 @@ export interface BaselineData {
   commitSHA?: string;
   perfsenseSHA?: string;
   configHash?: string;
+  /** PerfSense revision that produced this baseline. Absent on legacy baselines. */
+  harness?: BaselineHarness;
   runs: number;
   warmup?: number;
   env?: EnvironmentFingerprint;
   pages: Record<string, BaselinePage>;
   source: string;
+}
+
+/** Why a baseline capture was rejected or flagged. */
+export type BaselineDefectKind =
+  | "bimodal"
+  | "spread"
+  | "divergence"
+  | "below-resolution"
+  | "zero-variance"
+  | "insufficient-samples"
+  | "orphan-cell"
+  | "missing-metric"
+  | "missing-fixture";
+
+export interface BaselineDefect {
+  fixture: string;
+  /** Null for fixture-level defects (a whole fixture missing). */
+  metric: string | null;
+  kind: BaselineDefectKind;
+  /** `fail` blocks the baseline commit; `warn` is reported for human judgement. */
+  severity: "fail" | "warn";
+  detail: string;
+}
+
+export interface BaselineValidity {
+  /** True when no defect has `fail` severity. */
+  ok: boolean;
+  defects: BaselineDefect[];
+  /** True when a previous baseline was supplied and compared against. */
+  comparedWithPrevious: boolean;
+  fixtureCount: number;
+  metricCount: number;
 }
 
 export interface ThresholdLevel {
@@ -107,8 +166,32 @@ export interface ThresholdLevel {
   maxStatus?: 'pass' | 'warning';
 }
 
+/**
+ * Thresholds for `perfsense baseline validate`. Every limit is explicit by
+ * design: a metric with no configured spread limit is reported as unconfigured
+ * rather than passed or failed against a blanket default, so the gate can never
+ * silently approve noise or block on a wrong number.
+ */
+export interface ValidityConfig {
+  /** Max `(p90 - p10) / median` as a percentage, per metric name. */
+  maxSpreadPct?: Record<string, number>;
+  /** Max median movement against the previous baseline, percent, when the fixture hashes are unchanged. */
+  maxDivergencePct?: number;
+  /** Largest-consecutive-gap / median-of-other-gaps ratio that counts as two clusters. */
+  bimodalGapRatio?: number;
+  /** Median shift between the two clusters that counts as bimodal, percent. */
+  bimodalShiftPct?: number;
+  /** Metrics whose median sits below this cannot resolve a real change. */
+  resolutionFloor?: number;
+  /** Minimum valid samples per metric cell. */
+  minSamples?: number;
+  /** Reject a capture taken on a runner reporting a CPU quota below its core count. */
+  rejectThrottled?: boolean;
+}
+
 export interface PerfSenseConfig {
   thresholds: Record<string, ThresholdLevel>;
+  validity?: ValidityConfig;
 }
 
 export type CheckStatus =

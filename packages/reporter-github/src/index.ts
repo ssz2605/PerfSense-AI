@@ -37,6 +37,12 @@ export interface BaselineMeta {
   ageDays: number | null;
   stale: boolean;
   hasEnv: boolean;
+  /** Which PerfSense revision produced each side of the comparison. */
+  harness?: {
+    baselineRef: string | null;
+    runRef: string | null;
+    state: 'match' | 'mismatch' | 'unknown';
+  };
 }
 
 export interface CheckResult {
@@ -278,6 +284,22 @@ function detailBlock(
 function baselineBanner(meta: BaselineMeta | undefined, aiUnavailable: boolean): string[] {
   const lines: string[] = [];
   if (!meta) return lines;
+  if (meta.harness?.state === 'mismatch') {
+    // A harness mismatch is not a caveat, it invalidates the comparison: the
+    // two sides may collect different metrics and time them differently, so a
+    // delta here describes the measuring code rather than the change.
+    lines.push(
+      `> ⛔ **Baseline was captured with a different PerfSense revision** (baseline ` +
+        `\`${meta.harness.baselineRef ?? 'unknown'}\`, this run \`${meta.harness.runRef ?? 'unknown'}\`). ` +
+        'Deltas below describe the two harnesses, not the code — every verdict is withheld. ' +
+        'Re-capture the baseline on this revision to restore comparison.',
+    );
+  } else if (meta.harness?.state === 'unknown' && meta.harness.runRef && !meta.harness.baselineRef) {
+    lines.push(
+      '> ⚠ Baseline records no PerfSense revision, so comparability with this run cannot be ' +
+        'established. Verdicts are still issued; re-capture the baseline to make them certifiable.',
+    );
+  }
   if (meta.hasEnv === false) {
     lines.push(
       '> ⚠ Baseline has no environment fingerprint (legacy v1). Improvement verdicts are ' +

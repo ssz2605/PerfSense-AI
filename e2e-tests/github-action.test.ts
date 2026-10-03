@@ -176,11 +176,14 @@ describe("GitHub Action E2E", () => {
       expect(run0.callbackLatencyMax).toBeTypeOf("number");
       expect(run0.cumulativeDrift).toBeTypeOf("number");
       expect(run0.voiceOnsetError).toBeTypeOf("number");
-      // Unauthorized for Frère Jacques: rejected at collection, never raw data.
-      expect(run0.executionTime).toBeUndefined();
-      expect(run0.maxQueueDepth).toBeUndefined();
-      expect(run0.blocksExecuted).toBeUndefined();
+      // Now also approved for Frère Jacques: the widened contract lets the
+      // interpreter metrics through, and they arrive with real values.
+      expect(run0.executionTime).toBeTypeOf("number");
+      expect(run0.blocksExecuted).toBeTypeOf("number");
+      expect(run0.maxQueueDepth).toBeTypeOf("number");
+      // Still unauthorized for Frère Jacques: rejected at collection, never raw data.
       expect(run0.maxDepth).toBeUndefined();
+      expect(run0.maxActionDepth).toBeUndefined();
       expect(run0.memoryDelta).toBeUndefined();
       expect(run0.retainedHeap).toBeUndefined();
     } finally {
