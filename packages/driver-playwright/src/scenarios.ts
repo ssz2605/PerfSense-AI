@@ -87,7 +87,14 @@ const bootstrapSnippet = `
 })
 `;
 
-const openProjectSnippet = `
+/**
+ * Page-evaluated readiness probe for the open-project phase.
+ *
+ * Exported so the stability rule can be exercised directly: it is the only
+ * signal that a staged load has actually finished, and a rule this load-bearing
+ * should not be verified only by a 40-minute CI run.
+ */
+export const openProjectSnippet = `
 (async function (__opt) {
   const ps = (window).__perfsense = (window).__perfsense || {};
   const timeoutMs = __opt.timeoutMs || 120000;
@@ -97,11 +104,10 @@ const openProjectSnippet = `
     const mb = (window).__mb || {};
     return (mb.perfMarks && typeof mb.perfMarks.openStart === 'number') ? mb.perfMarks.openStart : null;
   })();
-  // "Render ready" means the workspace stopped growing: two consecutive
-  // samples taken ~400ms apart equal each other (and differ from the boot-time
-  // baseline, which is non-empty by default in the real app). On the real app
-  // blocks render to the canvas, so count blocks.blockList rather than DOM
-  // ".block" nodes; mocks without that surface fall back to the DOM count.
+  // "Render ready" means the workspace stopped growing (and differs from the
+  // boot-time baseline, which is non-empty by default in the real app). On the
+  // real app blocks render to the canvas, so count blocks.blockList rather than
+  // DOM ".block" nodes; mocks without that surface fall back to the DOM count.
   // window.__mb is read live every sample: it may not exist yet at scenario
   // start on cold pages.
   const blockCount = () => {
@@ -110,6 +116,16 @@ const openProjectSnippet = `
     return (document.querySelectorAll('#blockTable .block, .blockTable .block, #blocks .block')).length;
   };
   const initialLen = blockCount();
+  // A project this size is decoded in stages, and the block count sits still
+  // between two of them. Two equal samples cannot tell that lull from the end
+  // of the load. On RainbowConnection it ended the wait mid-decode on roughly
+  // half the runs, which reported projectLoadTime ~20% short and then handed
+  // the still-busy app to the export phase, whose timing moved the opposite
+  // way; the pair measured bimodal on every capture. Hold the count steady
+  // across STABLE_SAMPLES polls instead, long enough to outlast a lull between
+  // stages, so "ready" means finished rather than momentarily quiet.
+  const STABLE_POLL_MS = 400;
+  const STABLE_SAMPLES = 7;
   const waitStable = async () => {
     let prev = -1;
     let rounds = 0;
@@ -118,12 +134,12 @@ const openProjectSnippet = `
       const cur = blockCount();
       if (cur === prev && cur > 0 && cur !== initialLen) {
         rounds += 1;
-        if (rounds >= 2) return true;
+        if (rounds >= STABLE_SAMPLES) return true;
       } else {
         rounds = 0;
       }
       prev = cur;
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, STABLE_POLL_MS));
     }
   };
   let ready = await waitStable();
@@ -131,6 +147,7 @@ const openProjectSnippet = `
     // No renderable block table (e.g. minimal mocks): fall back to the bridge's
     // ready flag, then settle so the app finishes any async decode.
     for (;;) {
+      const mb = (window).__mb || {};
       const bridgeLoaded = mb.blocks && typeof mb.blocks.projectLoaded === 'function' && mb.blocks.projectLoaded();
       if (bridgeLoaded || Date.now() - startMs > timeoutMs) break;
       await new Promise((r) => setTimeout(r, 100));
