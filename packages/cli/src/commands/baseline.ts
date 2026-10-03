@@ -1,13 +1,14 @@
 import path from 'path';
 import fs from 'fs';
-import type { PageResult, BaselineData } from '@perfsense/core';
-import { median, percentile } from '@perfsense/statistics';
+import type { PageResult, BaselineData, BaselineMetricStatsV2, StabilityTier } from '@perfsense/core';
+import { median, percentile, mean, stdDev, mad, coefficientOfVariation, stabilityTier } from '@perfsense/statistics';
 import { isKnownFixture, isMetricApproved } from '@perfsense/benchmark-matrix';
+import { computeEnvironmentFingerprint } from './env';
 
 function printUsage(): void {
   console.log(
     'Usage:\n' +
-    '  perfsense baseline save --from <results.json> --out <baseline.json>\n' +
+    '  perfsense baseline save --from <results.json> --out <baseline.json> [--commit <sha>] [--warmup <n>]\n' +
     '  perfsense baseline load --file <baseline.json>\n'
   );
 }
@@ -28,15 +29,62 @@ function collectValues(runs: PageResult['runs'], metric: string): number[] {
     .filter((v): v is number => typeof v === 'number');
 }
 
+/** Jekyll CV tiers for the stability field in v2 baselines. */
+function tierOf(cv: number): StabilityTier {
+  if (cv < 0.05) return 'stable';
+  if (cv < 0.15) return 'moderate';
+  if (cv < 0.3) return 'high';
+  return 'extreme';
+}
+
+function computeStats(values: number[]): BaselineMetricStatsV2 {
+  const n = values.length;
+  const m = mean(values);
+  const sd = stdDev(values);
+  const cv = m === 0 ? Infinity : sd / Math.abs(m);
+  const tier = tierOf(cv);
+  return {
+    median: median(values),
+    p10: percentile(values, 10),
+    p90: percentile(values, 90),
+    mean: m,
+    sd,
+    mad: mad(values),
+    min: Math.min(...values),
+    max: Math.max(...values),
+    p25: percentile(values, 25),
+    p75: percentile(values, 75),
+    cv,
+    n,
+    invalid: 0,
+    values,
+    stability: {
+      tier,
+      flagged: tier === 'high' || tier === 'extreme',
+      note:
+        tier === 'stable' ? 'low variance: reliable for improvement certification'
+          : tier === 'moderate' ? 'moderate variance: improvements need ≥2σ pooled effect'
+            : tier === 'high' ? 'high variance: improvements demoted to likely-noise unless ≥3σ'
+              : 'extreme variance: improvements demoted to likely-noise unless ≥3σ; investigate measurement method',
+    },
+  };
+}
+
 export function save(argv: string[]): void {
   let fromFile = 'results.json';
   let outFile = 'baseline.json';
+  let commitSHA: string | undefined;
+  let warmup = 0;
 
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--from' && i + 1 < argv.length) {
       fromFile = argv[++i];
     } else if (argv[i] === '--out' && i + 1 < argv.length) {
       outFile = argv[++i];
+    } else if (argv[i] === '--commit' && i + 1 < argv.length) {
+      commitSHA = argv[++i];
+    } else if (argv[i] === '--warmup' && i + 1 < argv.length) {
+      warmup = parseInt(argv[++i], 10) || 0;
     }
   }
 
@@ -64,28 +112,29 @@ export function save(argv: string[]): void {
     const metricNames = getMetricNames(pageResult.runs).filter((m) =>
       isMetricApproved(pageResult.page, m),
     );
-    const pageMetrics: Record<string, { median: number; p10: number; p90: number; values: number[] }> = {};
+    const pageMetrics: Record<string, BaselineMetricStatsV2> = {};
 
     for (const metric of metricNames) {
       const values = collectValues(pageResult.runs, metric);
       if (values.length === 0) continue;
-      pageMetrics[metric] = {
-        median: median(values),
-        p10: percentile(values, 10),
-        p90: percentile(values, 90),
-        values,
-      };
+      pageMetrics[metric] = computeStats(values);
     }
 
     pages[pageResult.page] = pageMetrics;
   }
 
+  const now = new Date();
   const baseline: BaselineData = {
-    schema: 'perfsense-baseline-v1',
-    createdAt: new Date().toISOString(),
+    schema: 'perfsense-baseline-v2',
+    schemaVersion: 2,
+    createdAt: now.toISOString(),
+    generatedAt: now.toISOString(),
     runs: runsCount,
+    warmup,
     pages,
     source: fromFile,
+    commitSHA,
+    env: computeEnvironmentFingerprint(),
   };
 
   const outPath = path.resolve(outFile);

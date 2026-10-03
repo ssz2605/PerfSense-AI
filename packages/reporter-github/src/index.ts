@@ -1,4 +1,4 @@
-import type { CheckStatus } from '@perfsense/core';
+import type { CheckStatus, ContractSummary } from '@perfsense/core';
 import type { CorrelationResult, LikelyCause } from '@perfsense/correlation-engine';
 import {
   BENCHMARK_MATRIX,
@@ -14,10 +14,29 @@ export interface CheckResultEntry {
   page: string;
   metric: string;
   status: CheckStatus;
-  deltaPercent: number;
-  baselineMedian: number;
-  currentMedian: number;
+  /** Null when the change is at the noise floor / missing baseline. */
+  deltaPercent: number | null;
+  absDelta: number | null;
+  baselineMedian: number | null;
+  currentMedian: number | null;
   failThreshold: number;
+  pValue: number | null;
+  effectSize: number | null;
+  effectZ: number | null;
+  confidenceInterval: [number, number] | null;
+  baselineCV: number | null;
+  stabilityTier: string | null;
+  envMatched: boolean | null;
+  baselineAgeDays: number | null;
+  /** Deterministic explanation for likely-noise / inconclusive results. */
+  note: string | null;
+}
+
+export interface BaselineMeta {
+  envMatched: boolean | null;
+  ageDays: number | null;
+  stale: boolean;
+  hasEnv: boolean;
 }
 
 export interface CheckResult {
@@ -27,9 +46,15 @@ export interface CheckResult {
     warning: number;
     regression: number;
     failed: boolean;
+    improvement?: number;
+    likelyNoise?: number;
+    noBaseline?: number;
+    inconclusive?: number;
   };
   correlation?: CorrelationResult;
   correlationError?: string;
+  contract?: ContractSummary;
+  baselineMeta?: BaselineMeta;
 }
 
 export interface PRReportOptions {
@@ -49,11 +74,16 @@ export interface PRReportOptions {
 }
 
 /** Professional status words used in the full metrics table (no emojis). */
-export function statusWord(status: CheckStatus, deltaPercent: number): string {
-  if (status === 'REGRESSION') return 'Regression';
-  if (status === 'WARNING') return 'Warning';
-  if (deltaPercent < 0) return 'Improved';
-  return 'Passed';
+export function statusWord(status: CheckStatus): string {
+  switch (status) {
+    case 'REGRESSION': return 'Regression';
+    case 'WARNING': return 'Warning';
+    case 'IMPROVEMENT': return 'Improvement';
+    case 'LIKELY_NOISE': return 'Likely noise';
+    case 'NO_BASELINE': return 'No baseline';
+    case 'INCONCLUSIVE': return 'Inconclusive';
+    default: return 'No meaningful change';
+  }
 }
 
 function findCorrelation(
@@ -83,6 +113,10 @@ function formatSource(c: { source: string; sourceLocation?: { originalFile: stri
     : c.source;
 }
 
+function fmtMetricValue(value: number | null, metric: string): string {
+  return value === null ? '—' : formatMetricValue(value, metric);
+}
+
 /** Renders a fixture's full metric table (used in the collapsible section). */
 function fixtureTable(entries: CheckResultEntry[]): string[] {
   const lines: string[] = [];
@@ -92,9 +126,9 @@ function fixtureTable(entries: CheckResultEntry[]): string[] {
   for (const e of entries) {
     const status = isMetricUnverified(fixture, e.metric)
       ? 'Unverified'
-      : statusWord(e.status, e.deltaPercent);
+      : statusWord(e.status);
     lines.push(
-      `| ${e.metric} | ${formatMetricValue(e.baselineMedian, e.metric)} | ${formatMetricValue(e.currentMedian, e.metric)} | ${formatDeltaPercent(e.deltaPercent)} | ${status} |`,
+      `| ${e.metric} | ${fmtMetricValue(e.baselineMedian, e.metric)} | ${fmtMetricValue(e.currentMedian, e.metric)} | ${formatDeltaPercent(e.deltaPercent)} | ${status} |`,
     );
   }
   return lines;
@@ -107,8 +141,6 @@ function causeLines(
   aiPerMetric?: Record<string, string>,
 ): string[] {
   const lines: string[] = [];
-  lines.push(`Baseline: ${formatMetricValue(entry.baselineMedian, entry.metric)} | Current: ${formatMetricValue(entry.currentMedian, entry.metric)}`);
-  lines.push('');
 
   const { lc } = findCorrelation(correlation, entry.metric);
   if (lc) {
@@ -182,11 +214,6 @@ function verifiedEntries(view: FixtureView): CheckResultEntry[] {
   return view.entries.filter((e) => !isMetricUnverified(view.fixture, e.metric));
 }
 
-/** True when the improvement is large enough to be reportable. */
-function isMeaningfulImprovement(entry: CheckResultEntry): boolean {
-  return entry.status === 'PASS' && entry.deltaPercent <= -10;
-}
-
 interface FixtureSummaryStatus {
   icon: string;
   label: string;
@@ -195,12 +222,15 @@ interface FixtureSummaryStatus {
 function fixtureSummaryStatus(view: FixtureView): FixtureSummaryStatus {
   const verified = verifiedEntries(view);
   if (verified.some((e) => e.status === 'REGRESSION')) return { icon: '🔴', label: 'Regression' };
-  if (verified.some((e) => e.status === 'WARNING')) return { icon: '🟡', label: 'Warning' };
-  if (verified.some(isMeaningfulImprovement)) return { icon: '🟢', label: 'Improved' };
+  if (verified.some((e) => e.status === 'WARNING')) return { icon: '🟠', label: 'Warning' };
+  if (verified.some((e) => e.status === 'IMPROVEMENT')) return { icon: '🟢', label: 'Improved' };
+  if (verified.some((e) => e.status === 'LIKELY_NOISE')) return { icon: '🟡', label: 'Likely noise' };
   return { icon: '✅', label: 'Passed' };
 }
 
-/** Detail block heading + numbers + cause for one notable metric. */
+const NOISE_STATUSES = new Set<CheckStatus>(['LIKELY_NOISE', 'INCONCLUSIVE']);
+
+/** Detail block heading + numbers + cause/explanation for one notable metric. */
 function detailBlock(
   entry: CheckResultEntry,
   correlation: CorrelationResult | undefined,
@@ -210,7 +240,110 @@ function detailBlock(
   const lines: string[] = [];
   lines.push(`${icon} **${entry.metric}** — ${formatDeltaPercent(entry.deltaPercent)}`);
   lines.push('');
+  lines.push(
+    `Baseline: ${fmtMetricValue(entry.baselineMedian, entry.metric)} ` +
+    `| Current: ${fmtMetricValue(entry.currentMedian, entry.metric)}`,
+  );
+  lines.push('');
+
+  if (entry.status === 'IMPROVEMENT') {
+    // Statistically certified improvement — show the evidence, no cause/AI.
+    const evidence = [
+      entry.pValue !== null ? `p=${entry.pValue.toFixed(4)}` : null,
+      entry.effectSize !== null ? `d=${entry.effectSize.toFixed(2)}` : null,
+      entry.effectZ !== null ? `effectZ=${entry.effectZ.toFixed(2)}` : null,
+      entry.baselineCV !== null
+        ? `baseline CV=${(entry.baselineCV * 100).toFixed(1)}%`
+        : null,
+    ].filter((x): x is string => x !== null);
+    if (evidence.length > 0) {
+      lines.push(`**Evidence:** ${evidence.join(', ')} — statistically supported improvement.`);
+      lines.push('');
+    }
+    return lines;
+  }
+
+  if (NOISE_STATUSES.has(entry.status)) {
+    lines.push(`**Why ${entry.status === 'INCONCLUSIVE' ? 'inconclusive' : 'likely noise'}:** ${entry.note ?? 'no deterministic reason recorded'}`);
+    lines.push('');
+    return lines;
+  }
+
+  // Regression or warning — deterministic cause first, then AI.
   lines.push(...causeLines(entry, correlation, aiPerMetric));
+  return lines;
+}
+
+/** Baseline freshness/environment banner rendered right under the header. */
+function baselineBanner(meta: BaselineMeta | undefined, aiUnavailable: boolean): string[] {
+  const lines: string[] = [];
+  if (!meta) return lines;
+  if (meta.hasEnv === false) {
+    lines.push(
+      '> ⚠ Baseline has no environment fingerprint (legacy v1). Improvement verdicts are ' +
+      'not certified until a v2 baseline is captured; regressions below are flagged normally.',
+    );
+  }
+  if (meta.envMatched === false && meta.hasEnv) {
+    lines.push(
+      '> ⚠ This run’s environment differs from the baseline. Improvements are demoted to ' +
+      '“Likely noise” and flagged regressions may be runner noise — re-baseline on this runner to confirm.',
+    );
+  }
+  if (meta.stale && meta.ageDays !== null) {
+    lines.push(
+      `> ⚠ Baseline is ${meta.ageDays} days old (outside the freshness window). Improvements are ` +
+      'demoted to “Likely noise”; refresh the baseline to re-enable improvement verdicts.',
+    );
+  }
+  if (aiUnavailable) {
+    lines.push('> ⚠ AI unavailable — no provider/key configured. Deterministic causes still shown.');
+  }
+  if (lines.length > 0) lines.push('');
+  return lines;
+}
+
+/** Contract section: Expected / Collected / Valid / Missing / Skipped / Compared. */
+function contractSection(contract: ContractSummary | undefined, views: FixtureView[]): string[] {
+  const lines: string[] = [];
+  lines.push('## Contract');
+  lines.push('');
+  if (!contract) {
+    lines.push('No contract data available.');
+    lines.push('');
+    return lines;
+  }
+  lines.push('| | Count |');
+  lines.push('|---|---:|');
+  lines.push(`| Expected (Benchmark Matrix) | ${contract.expected} |`);
+  lines.push(`| Collected in this run | ${contract.collected} |`);
+  lines.push(`| Valid (≥5 samples) | ${contract.valid} |`);
+  lines.push(`| Missing baseline | ${contract.missing} |`);
+  lines.push(`| Skipped | ${contract.skipped} |`);
+  lines.push(`| Compared | ${contract.compared} |`);
+  lines.push('');
+
+  const notCompared = contract.rows.filter((r) => !r.compared && r.expected);
+  if (notCompared.length > 0) {
+    lines.push('**Not compared** (metrics that did not produce a verdict):');
+    lines.push('');
+    for (const row of notCompared) {
+      const reason =
+        row.skipped === 'no baseline'
+          ? '⚫ no baseline'
+          : row.skipped === 'no current samples'
+            ? '⚫ no samples collected'
+            : row.skipped === 'insufficient valid runs'
+              ? '⚫ insufficient valid runs'
+              : `⚫ ${row.skipped ?? 'skipped'}`;
+      lines.push(`- \`${row.fixture}\` · \`${row.metric}\` — ${reason}`);
+    }
+    lines.push('');
+  }
+  if (views.length > 0 && notCompared.length === 0) {
+    lines.push('Every approved metric was compared.');
+    lines.push('');
+  }
   return lines;
 }
 
@@ -233,6 +366,25 @@ export function generatePRComment(
   const verified = views.flatMap((v) => verifiedEntries(v));
   const regressions = verified.filter((e) => e.status === 'REGRESSION');
   const warnings = verified.filter((e) => e.status === 'WARNING');
+  const improvements = verified.filter((e) => e.status === 'IMPROVEMENT');
+  const likelyNoise = verified.filter((e) => e.status === 'LIKELY_NOISE');
+
+  const hasAI =
+    !!options.aiAnalysis ||
+    (options.aiPerMetric !== undefined && Object.keys(options.aiPerMetric).length > 0);
+  const correlationHasExplanation =
+    !!result.correlation &&
+    (Object.values(result.correlation.metrics).some((mc) => mc.likelyCause) ||
+      result.correlation.crossMetricCauses.length > 0);
+  // "AI unavailable" only when there is something to explain and neither the
+  // per-metric AI, the top-level AI section, nor a deterministic cause with a
+  // rationale was produced — never a silent drop.
+  const aiUnavailable =
+    (regressions.length > 0 || warnings.length > 0) &&
+    !hasAI &&
+    !correlationHasExplanation;
+
+  lines.push(...baselineBanner(result.baselineMeta, aiUnavailable));
 
   // ── Performance Check (overall status + fixture summary) ─────────────
   lines.push('## Performance Check');
@@ -241,16 +393,25 @@ export function generatePRComment(
     lines.push('🔴 Performance regression detected');
     lines.push('');
     lines.push(
-      `${regressions.length} regression(s) and ${warnings.length} warning(s) across approved metrics.`,
+      `${regressions.length} regression(s), ${warnings.length} warning(s), ` +
+      `${improvements.length} improvement(s), ${likelyNoise.length} likely-noise change(s) across approved metrics.`,
     );
   } else if (warnings.length > 0) {
-    lines.push('🟡 No significant regression');
+    lines.push('🟠 No hard regression (warnings present)');
     lines.push('');
     lines.push(
-      `${warnings.length} warning(s) across approved metrics — no metric exceeded its regression threshold.`,
+      `${warnings.length} warning(s), ${improvements.length} improvement(s), ` +
+      `${likelyNoise.length} likely-noise change(s) — no metric exceeded its regression threshold.`,
     );
   } else {
     lines.push('🟢 No significant regression');
+    if (improvements.length > 0 || likelyNoise.length > 0) {
+      lines.push('');
+      lines.push(
+        `${improvements.length} statistically supported improvement(s) and ` +
+        `${likelyNoise.length} likely-noise change(s) observed.`,
+      );
+    }
   }
   lines.push('');
 
@@ -267,30 +428,39 @@ export function generatePRComment(
   }
   lines.push('');
 
-  // ── Details: notable regressions/improvements per fixture ────────────
+  // ── Details: notable regressions/warnings/improvements per fixture ────
   lines.push('## Details');
   lines.push('');
   let anyNotable = false;
   for (const view of views) {
     const notable = verifiedEntries(view).filter(
-      (e) => e.status === 'REGRESSION' || isMeaningfulImprovement(e),
+      (e) =>
+        e.status === 'REGRESSION' ||
+        e.status === 'WARNING' ||
+        e.status === 'IMPROVEMENT' ||
+        e.status === 'LIKELY_NOISE' ||
+        e.status === 'INCONCLUSIVE',
     );
     if (notable.length === 0) continue;
     anyNotable = true;
     lines.push(`### ${view.displayName}`);
     lines.push('');
     for (const entry of notable) {
-      if (entry.status === 'REGRESSION') {
-        lines.push(...detailBlock(entry, result.correlation, '🔴', options.aiPerMetric));
-      } else {
-        lines.push(...detailBlock(entry, result.correlation, '🟢', options.aiPerMetric));
-      }
+      const icon =
+        entry.status === 'REGRESSION' ? '🔴'
+          : entry.status === 'WARNING' ? '🟠'
+            : entry.status === 'IMPROVEMENT' ? '🟢'
+              : '🟡';
+      lines.push(...detailBlock(entry, result.correlation, icon, options.aiPerMetric));
     }
   }
   if (!anyNotable) {
-    lines.push('No regressions or meaningful improvements detected.');
+    lines.push('No regressions or meaningful changes detected.');
     lines.push('');
   }
+
+  // ── Contract (coverage: nothing silently vanishes) ───────────────────
+  lines.push(...contractSection(result.contract, views));
 
   // ── Full approved metrics (open by default) ───────────────────────────
   lines.push('<details open>');

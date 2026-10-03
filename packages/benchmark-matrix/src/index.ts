@@ -171,8 +171,9 @@ export function formatMetricValue(value: number, metric: string): string {
   return `${value.toFixed(1)} ms`;
 }
 
-/** Formats a delta percentage with sign, e.g. +159.4%. */
-export function formatDeltaPercent(deltaPercent: number): string {
+/** Formats a delta percentage with sign, e.g. +159.4%. Null (near-zero) renders as '—'. */
+export function formatDeltaPercent(deltaPercent: number | null): string {
+  if (deltaPercent === null || !isFinite(deltaPercent)) return '—';
   const sign = deltaPercent >= 0 ? '+' : '';
   return `${sign}${deltaPercent.toFixed(1)}%`;
 }

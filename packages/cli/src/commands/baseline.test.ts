@@ -69,8 +69,15 @@ describe('baseline save contract', () => {
     save(['--from', fromFile, '--out', outFile]);
 
     const baseline: BaselineData = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
-    expect(baseline.schema).toBe('perfsense-baseline-v1');
+    expect(baseline.schema).toBe('perfsense-baseline-v2');
+    expect(baseline.schemaVersion).toBe(2);
     expect(baseline.runs).toBe(5);
+    // v2 provenance + environment fingerprint.
+    expect(baseline.generatedAt).toBeDefined();
+    expect(baseline.env).toBeDefined();
+    expect(baseline.env!.os).toBeDefined();
+    expect(baseline.env!.arch).toBeDefined();
+    expect(baseline.warmup).toBe(0);
 
     // Page keys match the matrix exactly.
     expect(Object.keys(baseline.pages).sort()).toEqual([
@@ -122,6 +129,15 @@ describe('baseline save contract', () => {
     expect(stats.median).toBe(1000); // median of [990,995,1000,1005,1010]
     expect(stats.p10).toBeLessThanOrEqual(1000);
     expect(stats.p90).toBeGreaterThanOrEqual(1005);
+    // v2 distribution stats + stability tier on every approved metric.
+    expect(stats.mean).toBe(1000);
+    expect(stats.sd).toBeGreaterThan(0);
+    expect(stats.mad).toBeGreaterThan(0);
+    expect(stats.min).toBe(990);
+    expect(stats.max).toBe(1010);
+    expect(stats.cv).toBeLessThan(0.05);
+    expect(stats.stability.tier).toBe('stable');
+    expect(stats.stability.flagged).toBe(false);
     // The approved LilyPond export metric is kept like the other Rainbow metrics.
     const lilypondStats = baseline.pages['RainbowConnection.html'].saveAsLilypondTime;
     expect(lilypondStats.values).toHaveLength(5);

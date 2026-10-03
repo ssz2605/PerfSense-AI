@@ -134,5 +134,8 @@ describe('Benchmark Matrix contract', () => {
     expect(formatMetricValue(42, 'blocksExecuted')).toBe('42');
     expect(formatDeltaPercent(159.4)).toBe('+159.4%');
     expect(formatDeltaPercent(-3.01)).toBe('-3.0%');
+    // Near-zero / missing percentages render as an em dash, not a fabricated
+    // number like "+0.0%".
+    expect(formatDeltaPercent(null)).toBe('—');
   });
 });

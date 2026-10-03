@@ -1,11 +1,15 @@
 import path from 'path';
 import fs from 'fs';
-import type { PageResult, BaselineData, BaselinePage, PerfSenseConfig, MetricCheckResult, CheckStatus, Evidence, ThresholdLevel } from '@perfsense/core';
-import { median, classifyRegression } from '@perfsense/statistics';
-import type { ClassificationResult } from '@perfsense/statistics';
-import { correlate, type CorrelationInput, type CorrelationResult } from '@perfsense/correlation-engine';
+import type {
+  PageResult, BaselineData, BaselinePage, PerfSenseConfig,
+  CheckStatus, Evidence, ThresholdLevel, ContractSummary,
+} from '@perfsense/core';
+import { median, classifyChange, type ChangeClassification } from '@perfsense/statistics';
+import { correlate, type CorrelationResult, type RegressionEntry, type CorrelationInput } from '@perfsense/correlation-engine';
 import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { generatePRComment, type CheckResult, type CheckResultEntry, type PRReportOptions } from '@perfsense/reporter-github';
+import { buildContract } from './contract';
+import { computeEnvironmentFingerprint, baselineEnvironment, environmentsMatch, baselineAgeDays } from './env';
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
@@ -29,7 +33,7 @@ function loadConfig(configPath?: string): PerfSenseConfig | null {
 function getThreshold(metric: string, config: PerfSenseConfig | null): ThresholdLevel {
   if (config?.thresholds?.[metric]) return config.thresholds[metric];
   if (DEFAULT_THRESHOLDS[metric]) return DEFAULT_THRESHOLDS[metric];
-  return { warning: 10, fail: 20 };
+  return { warning: 10, fail: 25 };
 }
 
 function computeDeltaPercent(baseline: number, current: number): number {
@@ -37,20 +41,15 @@ function computeDeltaPercent(baseline: number, current: number): number {
   return ((current - baseline) / baseline) * 100;
 }
 
-function mapStatus(s: ClassificationResult['status']): CheckStatus {
-  if (s === 'regression') return 'REGRESSION';
-  if (s === 'warning') return 'WARNING';
-  return 'PASS';
-}
-
-/** Applies a maxStatus ceiling to the delta-only verdict path. */
-function clampStatus(
-  status: CheckStatus,
-  maxStatus: 'pass' | 'warning' | undefined,
-): CheckStatus {
-  if (maxStatus === 'warning' && status === 'REGRESSION') return 'WARNING';
-  if (maxStatus === 'pass' && status !== 'PASS') return 'PASS';
-  return status;
+function mapStatus(s: ChangeClassification['status']): CheckStatus {
+  switch (s) {
+    case 'regression': return 'REGRESSION';
+    case 'warning': return 'WARNING';
+    case 'improvement': return 'IMPROVEMENT';
+    case 'likely-noise': return 'LIKELY_NOISE';
+    case 'inconclusive': return 'INCONCLUSIVE';
+    default: return 'PASS';
+  }
 }
 
 function collectCurrentValues(pageResult: PageResult, metric: string): number[] {
@@ -82,6 +81,7 @@ export async function run(argv: string[]): Promise<void> {
   let aiModel: string | undefined;
   let apiKey: string | undefined;
   let formatJson = false;
+  let maxFreshDays = 30;
   const reportOptions: PRReportOptions = {};
 
   for (let i = 0; i < argv.length; i++) {
@@ -94,6 +94,7 @@ export async function run(argv: string[]): Promise<void> {
     else if (argv[i] === '--ai-model' && i + 1 < argv.length) aiModel = argv[++i];
     else if (argv[i] === '--api-key' && i + 1 < argv.length) apiKey = argv[++i];
     else if (argv[i] === '--format' && i + 1 < argv.length) formatJson = argv[++i] === 'json';
+    else if (argv[i] === '--max-fresh-days' && i + 1 < argv.length) maxFreshDays = parseInt(argv[++i], 10) || 30;
     else if (argv[i] === '--pr' && i + 1 < argv.length) reportOptions.pr = argv[++i];
     else if (argv[i] === '--head' && i + 1 < argv.length) reportOptions.head = argv[++i];
     else if (argv[i] === '--baseline-ref' && i + 1 < argv.length) reportOptions.baselineRef = argv[++i];
@@ -109,8 +110,19 @@ export async function run(argv: string[]): Promise<void> {
   const current: PageResult[] = JSON.parse(fs.readFileSync(currentPath, 'utf-8'));
   const config = loadConfig(configPath);
 
+  // ── Baseline trust gates (freshness + environment) ───────────────────
+  // A stale or foreign baseline never demotes a regression (regressions are
+  // always worth seeing); it only blocks IMPROVEMENT-certification and is
+  // reported as a caveat on regression blocks.
+  const currentEnv = computeEnvironmentFingerprint();
+  const baselineEnv = baselineEnvironment(baseline);
+  const envMatched = baselineEnv ? environmentsMatch(baselineEnv, currentEnv) : null;
+  const ageDays = baselineAgeDays(baseline);
+  const baselineStale = ageDays !== null && ageDays > maxFreshDays;
+
   const allResults: CheckResultEntry[] = [];
   let hasRegression = false;
+  let hasWarning = false;
 
   for (const pageResult of current) {
     const pageName = pageResult.page;
@@ -130,98 +142,171 @@ export async function run(argv: string[]): Promise<void> {
         continue;
       }
       const currentValues = collectCurrentValues(pageResult, metric);
+      const baselineStats = baselinePage[metric];
+      const threshold = getThreshold(metric, config);
+      const effectiveMaxStatus: 'pass' | 'warning' | undefined =
+        isMetricWarnOnly(pageName, metric) ? 'warning' : threshold.maxStatus;
+
+      // Missing baseline: keep the metric visible instead of silently dropping it.
+      if (!baselineStats) {
+        const currentMedian = currentValues.length > 0 ? median(currentValues) : null;
+        allResults.push({
+          page: pageName,
+          metric,
+          status: 'NO_BASELINE',
+          deltaPercent: null,
+          absDelta: null,
+          baselineMedian: null,
+          currentMedian,
+          failThreshold: threshold.fail,
+          pValue: null,
+          effectSize: null,
+          effectZ: null,
+          confidenceInterval: null,
+          baselineCV: null,
+          stabilityTier: null,
+          envMatched,
+          baselineAgeDays: ageDays,
+          note: 'no baseline captured for this metric',
+        });
+        continue;
+      }
       if (currentValues.length === 0) {
         process.stderr.write(`Warning: no valid values for ${pageName}/${metric}, skipping\n`);
         continue;
       }
-      const baselineStats = baselinePage[metric];
-      if (!baselineStats) {
-        process.stderr.write(`Warning: no baseline for ${pageName}/${metric}, skipping\n`);
-        continue;
-      }
+
+      const baselineValues = collectBaselineValues(baselinePage, metric);
       const currentMedian = median(currentValues);
       const baselineMedian = baselineStats.median;
       const deltaPercent = computeDeltaPercent(baselineMedian, currentMedian);
-      const threshold = getThreshold(metric, config);
-      // Warn-only metrics can never post REGRESSION; a config maxStatus may
-      // cap others (memory, drift) at warning too.
-      const effectiveMaxStatus: 'pass' | 'warning' | undefined =
-        isMetricWarnOnly(pageName, metric) ? 'warning' : threshold.maxStatus;
 
-      const baselineValues = collectBaselineValues(baselinePage, metric);
-      let status: CheckStatus;
-      let pValue: number | null = null;
-      let effectSize: number | null = null;
-      let confidenceInterval: [number, number] | null = null;
+      let entry: CheckResultEntry;
       if (baselineValues && baselineValues.length > 0) {
-        const result = classifyRegression(baselineValues, currentValues, {
-          ...threshold,
-          maxStatus: effectiveMaxStatus,
-        });
-        status = mapStatus(result.status);
-        pValue = result.pValue;
-        effectSize = result.effectSize;
-        confidenceInterval = result.confidenceInterval;
+        // v2 baselines carry an explicit CV; legacy v1 baselines leave it
+        // undefined so the classifier derives it from the sample values.
+        const storedCv = (baselineStats as { cv?: unknown }).cv;
+        const baselineCv = typeof storedCv === 'number' && isFinite(storedCv)
+          ? storedCv
+          : undefined;
+        const cls = classifyChange(
+          baselineValues,
+          currentValues,
+          { ...threshold, maxStatus: effectiveMaxStatus },
+          {
+            baselineCV: baselineCv,
+            envMatched,
+            baselineAgeDays: ageDays,
+            maxFreshDays,
+          },
+        );
+        entry = {
+          page: pageName,
+          metric,
+          status: mapStatus(cls.status),
+          deltaPercent: cls.deltaPercent,
+          absDelta: cls.absDelta,
+          baselineMedian,
+          currentMedian,
+          failThreshold: threshold.fail,
+          pValue: cls.pValue,
+          effectSize: cls.effectSize,
+          effectZ: cls.effectZ,
+          confidenceInterval: cls.confidenceInterval,
+          baselineCV: cls.baselineCV,
+          stabilityTier: cls.stabilityTier,
+          envMatched,
+          baselineAgeDays: ageDays,
+          note: ['likely-noise', 'inconclusive'].includes(cls.status) ? cls.details : null,
+        };
       } else {
+        // Baseline has stats (median) but no sample values — fall back to the
+        // delta-only path, capped like the regression path.
         let raw: CheckStatus;
         if (deltaPercent >= threshold.fail) raw = 'REGRESSION';
         else if (deltaPercent >= threshold.warning) raw = 'WARNING';
         else raw = 'PASS';
-        status = clampStatus(raw, effectiveMaxStatus);
+        const status = effectiveMaxStatus === 'warning' && raw === 'REGRESSION'
+          ? 'WARNING'
+          : effectiveMaxStatus === 'pass' && raw !== 'PASS'
+            ? 'PASS'
+            : raw;
+        entry = {
+          page: pageName,
+          metric,
+          status,
+          deltaPercent,
+          absDelta: currentMedian - baselineMedian,
+          baselineMedian,
+          currentMedian,
+          failThreshold: threshold.fail,
+          pValue: null,
+          effectSize: null,
+          effectZ: null,
+          confidenceInterval: null,
+          baselineCV: null,
+          stabilityTier: null,
+          envMatched,
+          baselineAgeDays: ageDays,
+          note: null,
+        };
       }
 
-      allResults.push({ page: pageName, metric, status, deltaPercent, baselineMedian, currentMedian, failThreshold: threshold.fail });
-      if (status === 'REGRESSION') hasRegression = true;
+      allResults.push(entry);
+      if (entry.status === 'REGRESSION') hasRegression = true;
+      if (entry.status === 'WARNING') hasWarning = true;
     }
   }
 
-  // Run correlation if there are regressions
+  // ── Coverage contract (missing metrics stay visible) ─────────────────
+  const contract: ContractSummary = buildContract(current, baseline);
+
+  // ── Deterministic correlation (regressions only) ─────────────────────
   let correlation: CorrelationResult | undefined;
   let correlationError: string | undefined;
+  const regressionEntries: RegressionEntry[] = allResults
+    .filter((r) => r.status === 'REGRESSION' && r.baselineMedian !== null && r.currentMedian !== null)
+    .map((r) => ({
+      metric: r.metric,
+      baselineMedian: r.baselineMedian as number,
+      currentMedian: r.currentMedian as number,
+      deltaPercent: r.deltaPercent ?? computeDeltaPercent(r.baselineMedian as number, r.currentMedian as number),
+      pValue: r.pValue ?? 0.001,
+      effectSize: r.effectSize ?? 0.8,
+      confidenceInterval: (r.confidenceInterval ?? [r.currentMedian! * 0.9, r.currentMedian! * 1.1]) as [number, number],
+    }));
 
-  if (hasRegression) {
+  if (regressionEntries.length > 0) {
     try {
-      const regressionEntries = allResults
-        .filter((r) => r.status === 'REGRESSION')
-        .map((r) => ({
-          metric: r.metric,
-          baselineMedian: r.baselineMedian,
-          currentMedian: r.currentMedian,
-          deltaPercent: r.deltaPercent,
-          pValue: 0.001,
-          effectSize: 0.8,
-          confidenceInterval: [r.currentMedian * 0.9, r.currentMedian * 1.1] as [number, number],
-        }));
-
-      // Include the PR diff as evidence so the engine can score whether any
-      // changed code plausibly caused the regression. The git diff is repo-wide,
-      // so it is collected once and the engine re-scores it for every metric.
       const evidence: Evidence[] = [];
-      if (regressionEntries.length > 0) {
-        try {
-          const { collectGitDiffEvidence } = await import('@perfsense/evidence-git-diff');
-          evidence.push(collectGitDiffEvidence(regressionEntries[0].metric, repoDir));
-        } catch {
-          // Evidence collection is best-effort; correlation still runs without it.
-        }
+      try {
+        const { collectGitDiffEvidence } = await import('@perfsense/evidence-git-diff');
+        evidence.push(collectGitDiffEvidence(regressionEntries[0].metric, repoDir));
+      } catch {
+        // Evidence collection is best-effort; correlation still runs without it.
       }
-
       correlation = correlate({
         regression: regressionEntries,
         evidence,
         metricSchemas: {},
         sourceMapDir: sourceMapDir ? path.resolve(sourceMapDir) : undefined,
         repoDir: repoDir ? path.resolve(repoDir) : undefined,
-      });
+      } as CorrelationInput);
     } catch (err: any) {
       correlationError = err.message;
     }
   }
 
-  // Run AI analysis if provider configured
+  // ── AI only as an explanation layer, gated to unexplained regressions ─
+  // AI never decides a verdict (classification is fully deterministic). It
+  // runs strictly when a regression/warning exists AND the deterministic
+  // engine could not assign a cause, filling in one focused explanation per
+  // metric. This keeps llama3.1 out of PRs that have nothing to explain.
+  const aiNeeded = hasRegression || hasWarning;
   let aiAnalysis: string | undefined;
   let aiPerMetric: Record<string, string> | undefined;
-  if (hasRegression && correlation && aiProvider) {
+
+  if (aiNeeded && aiProvider) {
     try {
       const { generateAIAnalysis } = require('@perfsense/ai-provider');
       const gitContext = { commit: 'HEAD', message: '', author: '', filesChanged: [] as string[] };
@@ -234,71 +319,105 @@ export async function run(argv: string[]): Promise<void> {
           gitContext.author = log[2] || '';
           const files = execSync('git diff --name-only HEAD~1 HEAD', { cwd: repoDir, encoding: 'utf-8' }).trim();
           gitContext.filesChanged = files ? files.split('\n') : [];
-        } catch { /* best-effort: git context is supplementary to the correlation data */ }
+        } catch { /* best-effort */ }
       }
       const effectiveApiKey = apiKey || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
       const aiConfig = {
         provider: aiProvider as any,
         apiKey: effectiveApiKey,
-        // Ollama has no API key and uses a local model (llama3.1); the hosted
-        // providers fall back to a small chat model.
         model: aiModel || (aiProvider === 'ollama' ? 'llama3.1:8b' : 'gpt-4o-mini'),
       };
       if (effectiveApiKey || aiProvider === 'ollama') {
-        const aiResult = await generateAIAnalysis(correlation, gitContext, aiConfig);
-        if (aiResult) {
-          aiAnalysis = aiResult.explanation;
+        // Holistic analysis only when there is something to analyze.
+        if (hasRegression && correlation) {
+          const aiResult = await generateAIAnalysis(correlation, gitContext, aiConfig);
+          if (aiResult) aiAnalysis = aiResult.explanation;
         }
 
-        // The deterministic engine may have no cause for some metrics
-        // (e.g. bootstrapTotal/initTotal). Ask the AI for a focused
-        // per-metric explanation so the report can fill those gaps.
-        // Skip metrics already explained by a shared cross-metric cause;
-        // the reporter renders that cause directly.
+        // Per-metric explanations for regressions AND warnings whose cause the
+        // deterministic engine could not find. Warnings have no correlation
+        // entry, so they get one synthesized from the classified result.
         const perMetric: Record<string, string> = {};
-        for (const [metric, mc] of Object.entries(correlation.metrics)) {
-          if (mc.likelyCause) continue;
-          const hasSharedCause = correlation.crossMetricCauses.some((c) =>
-            c.affectedMetrics.some((m) => m.toLowerCase() === metric.toLowerCase()),
-          );
-          if (hasSharedCause) continue;
+        const explainedMetrics = new Set<string>();
+        if (correlation) {
+          for (const [metric, mc] of Object.entries(correlation.metrics)) {
+            if (mc.likelyCause) explainedMetrics.add(metric.toLowerCase());
+          }
+          for (const c of correlation.crossMetricCauses) {
+            for (const m of c.affectedMetrics) explainedMetrics.add(m.toLowerCase());
+          }
+        }
+        for (const entry of allResults) {
+          const isUnexplainedRegression = entry.status === 'REGRESSION' && !explainedMetrics.has(entry.metric.toLowerCase());
+          const isUnexplainedWarning = entry.status === 'WARNING';
+          if (!isUnexplainedRegression && !isUnexplainedWarning) continue;
+          if (entry.baselineMedian === null || entry.currentMedian === null) continue;
           try {
             const focused = await generateAIAnalysis(
               {
-                metrics: { [metric]: mc },
+                metrics: {
+                  [entry.metric]: {
+                    regression: {
+                      metric: entry.metric,
+                      baselineMedian: entry.baselineMedian,
+                      currentMedian: entry.currentMedian,
+                      deltaPercent: entry.deltaPercent ?? 0,
+                      pValue: entry.pValue ?? 0.05,
+                      effectSize: entry.effectSize ?? 0.147,
+                      confidenceInterval: entry.confidenceInterval ?? [entry.currentMedian * 0.9, entry.currentMedian * 1.1],
+                    },
+                    evidence: [],
+                    likelyCause: null,
+                    filteredEvidence: 0,
+                  },
+                },
                 crossMetricCauses: [],
                 summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 1 },
               },
               gitContext,
               aiConfig,
             );
-            if (focused) perMetric[metric] = focused.explanation;
+            if (focused) perMetric[entry.metric] = focused.explanation;
           } catch { /* per-metric AI failed silently; the block falls back to "No likely cause." */ }
         }
-        if (Object.keys(perMetric).length > 0) {
-          aiPerMetric = perMetric;
-        }
+        if (Object.keys(perMetric).length > 0) aiPerMetric = perMetric;
       }
     } catch {
       // AI analysis failed silently
     }
   }
 
-  // Build check result
+  // ── Build check result ───────────────────────────────────────────────
+  const summary = {
+    pass: allResults.filter((r) => r.status === 'PASS').length,
+    warning: allResults.filter((r) => r.status === 'WARNING').length,
+    regression: allResults.filter((r) => r.status === 'REGRESSION').length,
+    improvement: allResults.filter((r) => r.status === 'IMPROVEMENT').length,
+    likelyNoise: allResults.filter((r) => r.status === 'LIKELY_NOISE').length,
+    noBaseline: allResults.filter((r) => r.status === 'NO_BASELINE').length,
+    inconclusive: allResults.filter((r) => r.status === 'INCONCLUSIVE').length,
+    failed: hasRegression,
+  };
   const checkResult: CheckResult = {
     results: allResults,
-    summary: {
-      pass: allResults.filter((r) => r.status === 'PASS').length,
-      warning: allResults.filter((r) => r.status === 'WARNING').length,
-      regression: allResults.filter((r) => r.status === 'REGRESSION').length,
-      failed: hasRegression,
-    },
+    summary,
     correlation,
     correlationError,
+    contract,
+    baselineMeta: {
+      envMatched,
+      ageDays,
+      stale: baselineStale,
+      hasEnv: baselineEnv !== null,
+    },
   };
 
   // Generate PR comment
-  const comment = generatePRComment(checkResult, { ...reportOptions, aiAnalysis, aiPerMetric });
+  const comment = generatePRComment(checkResult, {
+    ...reportOptions,
+    aiAnalysis,
+    aiPerMetric,
+  });
 
   if (formatJson) {
     const report = {
@@ -306,6 +425,8 @@ export async function run(argv: string[]): Promise<void> {
       correlation,
       aiAnalysis,
       aiPerMetric,
+      aiNeeded,
+      baseline: { envMatched, ageDays, stale: baselineStale, hasEnv: baselineEnv !== null },
       prComment: comment,
     };
     console.log(JSON.stringify(report, null, 2));

@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { median, percentile, bootstrapCI, mannWhitneyU, cliffsDelta, classifyRegression } from './index';
+import {
+  median, percentile, bootstrapCI, mannWhitneyU, cliffsDelta, classifyRegression,
+  classifyChange, effectZ, pooledStdDev, coefficientOfVariation, stabilityTier,
+} from './index';
 
 describe('median', () => {
   it('odd length', () => {
@@ -227,5 +230,118 @@ describe('classifyRegression zero-baseline / noise-floor rule', () => {
   it('custom absEpsilon override is honored', () => {
     const result = classifyRegression([0, 0, 0, 0, 0], [0.5, 0.5, 0.5, 0.5, 0.5], { warning: 10, fail: 20, absEpsilon: 1 });
     expect(result.status).toBe('pass');
+  });
+});
+
+describe('sample stats and stability tiers', () => {
+  it('coefficientOfVariation is sd/mean and tiered by Jekyll thresholds', () => {
+    expect(coefficientOfVariation([100, 100, 100, 100, 100])).toBe(0);
+    expect(stabilityTier(coefficientOfVariation([100, 100, 100, 100, 100]))).toBe('stable');
+    expect(stabilityTier(0.12)).toBe('moderate');
+    expect(stabilityTier(0.19)).toBe('high');
+    expect(stabilityTier(0.4)).toBe('extreme');
+  });
+
+  it('returns Infinity for a perfectly separated effect (zero pooled scatter)', () => {
+    expect(effectZ([1, 1, 1, 1, 1], [2, 2, 2, 2, 2])).toBe(Infinity);
+    expect(pooledStdDev([1, 1, 1], [2, 2, 2])).toBe(0);
+  });
+});
+
+describe('classifyChange', () => {
+  const thresholds = { warning: 10, fail: 25 };
+  // Perfectly separated groups: p < 0.05, |Cliff's δ| = 1, delta -40%.
+  const baseline = [1000, 1000, 1000, 1000, 1000];
+  const current = [600, 600, 600, 600, 600];
+  const fresh = { envMatched: true, baselineAgeDays: 5, baselineCV: 0.02 };
+
+  it('keeps the regression side identical to classifyRegression (never demoted by env)', () => {
+    const result = classifyChange(baseline, [2000, 2000, 2000, 2000, 2000], thresholds, fresh);
+    expect(result.status).toBe('regression');
+    expect(result.pValue).toBeLessThan(0.05);
+    expect(result.effectSize).toBeGreaterThanOrEqual(0.8);
+    // Regressions are reported even when the environment match is unknown.
+    const unknownEnv = classifyChange(baseline, [2000, 2000, 2000, 2000, 2000], thresholds);
+    expect(unknownEnv.status).toBe('regression');
+  });
+
+  it('certifies improvements only when every trust gate passes', () => {
+    const result = classifyChange(baseline, current, thresholds, fresh);
+    expect(result.status).toBe('improvement');
+    expect(result.deltaPercent).toBe(-40);
+    expect(result.effectZ).toBe(Infinity);
+    expect(result.stabilityTier).toBe('stable');
+  });
+
+  it('demotes a significant improvement to likely-noise when the baseline env is unknown (v1)', () => {
+    const result = classifyChange(baseline, current, thresholds);
+    expect(result.status).toBe('likely-noise');
+    expect(result.details).toContain('environment fingerprint unknown or mismatched');
+  });
+
+  it('demotes an improvement to likely-noise when the baseline is stale', () => {
+    const result = classifyChange(baseline, current, thresholds, {
+      envMatched: true,
+      baselineAgeDays: 60,
+      baselineCV: 0.02,
+    });
+    expect(result.status).toBe('likely-noise');
+    expect(result.details).toContain('baseline stale');
+  });
+
+  it('leaves a notable change below the fail threshold as likely-noise (initTotal case)', () => {
+    // -20.5% is past the warning 10% but under the fail 25% gate.
+    const small = classifyChange(baseline, [795, 795, 795, 795, 795], { warning: 10, fail: 25 }, fresh);
+    expect(small.deltaPercent).toBeCloseTo(-20.5, 1);
+    expect(small.status).toBe('likely-noise');
+    expect(small.details).toContain('< fail');
+  });
+
+  it('returns inconclusive (no verdict) below MIN_RUNS samples', () => {
+    const short = classifyChange([100, 200, 300], [400, 400, 400, 400, 400], thresholds);
+    expect(short.status).toBe('inconclusive');
+    expect(short.pValue).toBeNull();
+    expect(short.deltaPercent).not.toBeNull();
+  });
+
+  it('treats noise-floor deltas as a null-percentage pass', () => {
+    const result = classifyChange([0, 0, 0, 0, 0], [1e-12, 2e-12, 1e-12, 3e-12, 2e-12], thresholds);
+    expect(result.status).toBe('pass');
+    expect(result.deltaPercent).toBeNull();
+  });
+
+  it('nulls the percentage for zero-delta change on real-scale metrics (heapAfterBoot style)', () => {
+    const heap = [47400000, 44700000, 44700000, 47400000, 47400000];
+    const result = classifyChange(heap, [...heap], thresholds);
+    expect(result.status).toBe('pass');
+    expect(result.deltaPercent).toBeNull();
+  });
+
+  it('keeps a real 0 → large jump as a regression while nulling the percentage', () => {
+    const result = classifyChange([0, 0, 0, 0, 0], [100, 100, 100, 100, 100], thresholds);
+    expect(result.status).toBe('regression');
+    expect(result.deltaPercent).toBeNull();
+  });
+
+  it('demotes improvements on extreme-CV baselines unless the effect is ≥3σ', () => {
+    const wideBaseline = [1000, 2000, 1500, 3000, 2500]; // CV ≈ 40% → extreme
+    // No explicit baselineCV: the classifier derives it from the samples.
+    const stepped = classifyChange(wideBaseline, current, thresholds, {
+      envMatched: true,
+      baselineAgeDays: 5,
+    });
+    expect(stepped.baselineCV!).toBeGreaterThan(0.3);
+    expect(stepped.stabilityTier).toBe('extreme');
+    expect(stepped.status).toBe('likely-noise');
+    expect(stepped.details).toContain('CV extreme');
+  });
+
+  it('caps an otherwise-significant regression at warning via maxStatus', () => {
+    const result = classifyChange(
+      baseline,
+      [2000, 2000, 2000, 2000, 2000],
+      { ...thresholds, maxStatus: 'warning' },
+    );
+    expect(result.status).toBe('warning');
   });
 });

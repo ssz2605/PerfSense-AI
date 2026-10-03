@@ -90,7 +90,7 @@ describe("GitHub Action E2E", () => {
       expect(reportOutput).toContain("Fixture summary");
       expect(reportOutput).toContain("🟢 No significant regression");
       expect(reportOutput).toContain("No benchmark results match the approved Benchmark Matrix.");
-      expect(reportOutput).toContain("No regressions or meaningful improvements detected.");
+      expect(reportOutput).toContain("No regressions or meaningful changes detected.");
       expect(reportOutput).toContain("Artifacts");
 
       // Step 5: Test cache command

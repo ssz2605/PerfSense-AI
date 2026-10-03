@@ -10,9 +10,19 @@ function makeEntry(partial?: Partial<CheckResult['results'][number]>) {
     metric: 'exportMIDITime',
     status: 'PASS' as const,
     deltaPercent: 0,
+    absDelta: 0,
     baselineMedian: 1000,
     currentMedian: 1000,
     failThreshold: 10,
+    pValue: null,
+    effectSize: null,
+    effectZ: null,
+    confidenceInterval: null,
+    baselineCV: null,
+    stabilityTier: null,
+    envMatched: null,
+    baselineAgeDays: null,
+    note: null,
     ...partial,
   };
 }
@@ -112,8 +122,8 @@ describe('summary statuses and compact details', () => {
         makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'WARNING', deltaPercent: 12 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7 }),
-        // exportMIDITime with a meaningful improvement to cover the Improved label
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: -20, currentMedian: 800 }),
+        // A genuine classified improvement (not inferred from a negative delta).
+        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'IMPROVEMENT', deltaPercent: -20, currentMedian: 800 }),
       ],
       summary: { pass: 2, warning: 1, regression: 1, failed: true },
     };
@@ -121,13 +131,13 @@ describe('summary statuses and compact details', () => {
     expect(comment).toContain('🔴 Performance regression detected');
     expect(comment).toContain('| Rainbow Connection | 🔴 Regression |');
     // The full table still uses professional words.
-    expect(comment).toContain('| Passed |');
+    expect(comment).toContain('| No meaningful change |');
     expect(comment).toContain('| Warning |');
     expect(comment).toContain('| Regression |');
-    expect(comment).toContain('| Improved |');
+    expect(comment).toContain('| Improvement |');
   });
 
-  it('reports a warning-only run as no significant regression', () => {
+  it('reports a warning-only run as warning, not regression, and surfaces warnings in Details', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMean', status: 'WARNING', deltaPercent: 42, baselineMedian: 40, currentMedian: 56.8 }),
@@ -136,10 +146,10 @@ describe('summary statuses and compact details', () => {
       summary: { pass: 0, warning: 2, regression: 0, failed: false },
     };
     const comment = generatePRComment(result, PR_27);
-    expect(comment).toContain('🟡 No significant regression');
-    expect(comment).toContain('| Frère Jacques | 🟡 Warning |');
-    // Warnings are surfaced in the summary but not as detail blocks.
-    expect(comment).toContain('No regressions or meaningful improvements detected.');
+    expect(comment).toContain('🟠 No hard regression (warnings present)');
+    expect(comment).toContain('| Frère Jacques | 🟠 Warning |');
+    expect(comment).toContain('🟠 **callbackLatencyMean** — +42.0%');
+    expect(comment).toContain('**Likely cause:** No likely cause identified.');
   });
 
   it('renders only notable fixtures in Details and passes through to the collapsible table', () => {
@@ -153,7 +163,7 @@ describe('summary statuses and compact details', () => {
     const comment = generatePRComment(result, PR_27);
     const details = comment.split('## Details')[1].split('<details')[0];
     expect(details).not.toContain('### Rainbow Connection');
-    expect(details).toContain('No regressions or meaningful improvements detected.');
+    expect(details).toContain('No regressions or meaningful changes detected.');
     // Both fixtures still appear in the collapsible section.
     expect(comment).toContain('### Rainbow Connection');
     expect(comment).toContain('### index.html (bootstrap)');
@@ -175,16 +185,34 @@ describe('summary statuses and compact details', () => {
     expect(comment).toContain('🟢 No significant regression');
   });
 
-  it('shows meaningful improvements as green detail blocks', () => {
+  it('shows classified improvements as green detail blocks with statistical evidence', () => {
     const result: CheckResult = {
       results: [
-        makeEntry({ page: 'ascending-notes-color-spiral.html', metric: 'executionTime', status: 'PASS', deltaPercent: -12.3, baselineMedian: 743, currentMedian: 651.6 }),
+        makeEntry({
+          page: 'ascending-notes-color-spiral.html',
+          metric: 'executionTime',
+          status: 'IMPROVEMENT',
+          deltaPercent: -12.3,
+          baselineMedian: 743,
+          currentMedian: 651.6,
+          pValue: 0.02,
+          effectSize: 0.5,
+          effectZ: 2.4,
+          baselineCV: 0.09,
+          stabilityTier: 'moderate',
+          envMatched: true,
+          baselineAgeDays: 3,
+        }),
       ],
-      summary: { pass: 1, warning: 0, regression: 0, failed: false },
+      summary: { pass: 0, warning: 0, regression: 0, failed: false, improvement: 1 },
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).toContain('| ascending-notes-color-spiral | 🟢 Improved |');
     expect(comment).toContain('🟢 **executionTime** — -12.3%');
+    // A certified improvement shows evidence, not a fake "cause".
+    expect(comment).toContain('**Evidence:**');
+    expect(comment).toContain('p=0.0200, d=0.50, effectZ=2.40, baseline CV=9.0%');
+    expect(comment).not.toContain('**Likely cause:**');
   });
 });
 

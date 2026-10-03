@@ -4,6 +4,64 @@ export function median(values: number[]): number {
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+export function mean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+/** Sample standard deviation (n - 1 denominator). */
+export function stdDev(values: number[]): number {
+  if (values.length < 2) return 0;
+  const m = mean(values);
+  const variance = values.reduce((sum, v) => sum + (v - m) * (v - m), 0) / (values.length - 1);
+  return Math.sqrt(variance);
+}
+
+/** Median absolute deviation — robust scatter estimate. */
+export function mad(values: number[]): number {
+  if (values.length === 0) return 0;
+  const m = median(values);
+  return median(values.map((v) => Math.abs(v - m)));
+}
+
+/**
+ * Coefficient of variation (sample sd / mean). Undefined (returns Infinity)
+ * for zero means so stability tiers fall to 'extreme' instead of dividing by
+ * zero.
+ */
+export function coefficientOfVariation(values: number[]): number {
+  const m = mean(values);
+  if (m === 0) return Infinity;
+  return stdDev(values) / Math.abs(m);
+}
+
+/** Jekyll stability tiers, indexed by coefficient of variation. */
+export type StabilityTier = 'stable' | 'moderate' | 'high' | 'extreme';
+
+export function stabilityTier(cv: number): StabilityTier {
+  if (cv < 0.05) return 'stable';
+  if (cv < 0.15) return 'moderate';
+  if (cv < 0.3) return 'high';
+  return 'extreme';
+}
+
+/** Pooled standard deviation of two independent samples. */
+export function pooledStdDev(a: number[], b: number[]): number {
+  const variance = ((a.length - 1) * stdDev(a) ** 2 + (b.length - 1) * stdDev(b) ** 2) /
+    (a.length + b.length - 2);
+  return Math.sqrt(Math.max(0, variance));
+}
+
+/**
+ * Effect size of the median shift in units of pooled scatter. Infinity when
+ * both samples are perfectly tight (pooled sd ≈ 0).
+ */
+export function effectZ(baseline: number[], current: number[]): number {
+  const pooled = pooledStdDev(baseline, current);
+  if (pooled === 0) return Infinity;
+  return Math.abs(median(current) - median(baseline)) / pooled;
+}
+
 export function percentile(values: number[], p: number): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -220,4 +278,218 @@ function capStatus(
     };
   }
   return result;
+}
+
+/** Six-state classification used by the PR report (superset of classifyRegression). */
+export type ChangeStatus =
+  | 'pass'
+  | 'warning'
+  | 'regression'
+  | 'improvement'
+  | 'likely-noise'
+  | 'inconclusive';
+
+export interface ChangeClassification {
+  status: ChangeStatus;
+  /** Null when the percentage is meaningless (near-zero baseline / noise floor). */
+  deltaPercent: number | null;
+  absDelta: number;
+  pValue: number | null;
+  effectSize: number | null;
+  effectZ: number | null;
+  confidenceInterval: [number, number] | null;
+  baselineMedian: number;
+  currentMedian: number;
+  baselineCV: number | null;
+  stabilityTier: StabilityTier | null;
+  /** null when the baseline carries no environment fingerprint (legacy v1). */
+  envMatched: boolean | null;
+  baselineAgeDays: number | null;
+  details: string;
+}
+
+export interface ChangeOptions {
+  /** CV of the baseline distribution (read from baseline v2 stats when available). */
+  baselineCV?: number | null;
+  /** Whether the current run env matches the baseline env; null when unknown. */
+  envMatched?: boolean | null;
+  /** Baseline age in days when generated; null when unknown (legacy v1). */
+  baselineAgeDays?: number | null;
+  /** Maximum baseline age (days) at which improvements are trusted. */
+  maxFreshDays?: number;
+  /** Minimum |effectZ| (median shift in pooled-σ units) to trust an improvement. */
+  minEffectZ?: number;
+}
+
+/**
+ * Full six-state classifier used by the PR report.
+ *
+ * - Regressions/warnings reuse the exact `classifyRegression` contract
+ *   (delta thresholds + Mann-Whitney p < 0.05 + |Cliff's δ| ≥ 0.147), and are
+ *   never demoted by environment/staleness — those are reported as caveats.
+ * - Improvements (negative delta) demand strictly more evidence: |delta| past
+ *   the fail threshold, statistical significance, a ≥2σ pooled effect, a fresh
+ *   baseline (≤ maxFreshDays), a matching environment fingerprint, and a
+ *   non-extreme baseline CV (or ≥3σ when CV is extreme). Any failed gate lands
+ *   in 'likely-noise' instead of green.
+ * - Fewer than `MIN_RUNS` samples per group → 'inconclusive' (no verdict).
+ */
+export function classifyChange(
+  baseline: number[],
+  current: number[],
+  thresholds: { warning: number; fail: number; absEpsilon?: number; maxStatus?: 'pass' | 'warning' },
+  opts?: ChangeOptions
+): ChangeClassification {
+  const maxFreshDays = opts?.maxFreshDays ?? 30;
+  const minEffectZ = opts?.minEffectZ ?? 2;
+
+  const common = {
+    baselineMedian: median(baseline),
+    currentMedian: median(current),
+    baselineCV: opts?.baselineCV !== undefined ? opts.baselineCV : coefficientOfVariation(baseline),
+    envMatched: opts?.envMatched !== undefined ? opts.envMatched : null,
+    baselineAgeDays: opts?.baselineAgeDays !== undefined ? opts.baselineAgeDays : null,
+  };
+  const stability = common.baselineCV === null || !isFinite(common.baselineCV)
+    ? null
+    : stabilityTier(common.baselineCV);
+
+  if (baseline.length === 0 || current.length === 0) {
+    return {
+      ...common,
+      status: 'inconclusive',
+      deltaPercent: null,
+      absDelta: 0,
+      pValue: null,
+      effectSize: null,
+      effectZ: null,
+      confidenceInterval: null,
+      stabilityTier: stability,
+      details: 'no samples in baseline or current group',
+    };
+  }
+
+  const absEpsilon = thresholds.absEpsilon ?? DEFAULT_ABS_EPSILON;
+  const absDelta = common.currentMedian - common.baselineMedian;
+  const rawDelta = common.baselineMedian === 0
+    ? (common.currentMedian > 0 ? 100 : 0)
+    : ((common.currentMedian - common.baselineMedian) / common.baselineMedian) * 100;
+  // A percentage is meaningless when the baseline sits at the measurement
+  // noise floor (drift/lag residue, zeroed memory metrics), so the report
+  // shows "—" instead of a fabricated number like "-6.6%." The classification
+  // itself still uses `rawDelta` so a real 0 → large jump keeps regressing.
+  const pctNull = Math.abs(common.baselineMedian) < absEpsilon;
+
+  const enoughData = baseline.length >= MIN_RUNS && current.length >= MIN_RUNS;
+
+  if (!enoughData) {
+    return {
+      ...common,
+      status: 'inconclusive',
+      deltaPercent: pctNull ? null : rawDelta,
+      absDelta,
+      pValue: null,
+      effectSize: null,
+      effectZ: null,
+      confidenceInterval: null,
+      stabilityTier: stability,
+      details: `${baseline.length}/${MIN_RUNS} baseline and ${current.length}/${MIN_RUNS} current valid runs; no verdict (needs ${MIN_RUNS}+ each)`,
+    };
+  }
+
+  // Noise floor: the median shift itself is below measurement precision at any
+  // baseline scale (identical runs, drift residue) — treat the percentage as
+  // meaningless (null) and the result as pass.
+  if (Math.abs(absDelta) < absEpsilon) {
+    return {
+      ...common,
+      status: 'pass',
+      deltaPercent: null,
+      absDelta,
+      pValue: null,
+      effectSize: null,
+      effectZ: null,
+      confidenceInterval: null,
+      stabilityTier: stability,
+      details: `median shift |delta|=${absDelta} below noise epsilon=${absEpsilon}; percentage set to null`,
+    };
+  }
+
+  const pValue = mannWhitneyU(baseline, current);
+  const effectSize = Math.abs(cliffsDelta(baseline, current));
+  const confidenceInterval = bootstrapCI(current, 1000, 0.95);
+  const z = effectZ(baseline, current);
+  const significant = pValue < P_VALUE_THRESHOLD && effectSize >= EFFECT_SIZE_THRESHOLD;
+  const failPct = thresholds.fail;
+  const warnPct = thresholds.warning;
+
+  let status: ChangeStatus;
+  let details: string;
+
+  if (absDelta >= 0) {
+    // Slower or unchanged — reuse the existing regression contract verbatim.
+    if (rawDelta >= failPct && significant) {
+      status = 'regression';
+      details = `delta=${rawDelta.toFixed(1)}% >= fail ${failPct}%, p=${pValue.toFixed(4)}, d=${effectSize.toFixed(2)} (significant)`;
+    } else if (rawDelta >= warnPct) {
+      status = 'warning';
+      details = `delta=${rawDelta.toFixed(1)}% >= warning ${warnPct}% (p=${pValue.toFixed(4)}, d=${effectSize.toFixed(2)})`;
+    } else {
+      status = 'pass';
+      details = `delta=${rawDelta.toFixed(1)}% within thresholds`;
+    }
+    if (status !== 'pass' && stability === 'extreme' && common.baselineCV !== null) {
+      details += `; baseline CV ${(common.baselineCV * 100).toFixed(1)}% is extreme — treat as suspect`;
+    }
+  } else {
+    // Improvement direction: every gate below must pass or the result is noise.
+    const magnitudeReachedFail = -rawDelta >= failPct;
+    const fresh = common.baselineAgeDays !== null && common.baselineAgeDays <= maxFreshDays;
+    const envTrusted = common.envMatched === true;
+    const stableEnough = stability !== 'extreme' || z >= 3;
+    const effectTrusted = z >= minEffectZ;
+
+    if (magnitudeReachedFail && significant && fresh && envTrusted && stableEnough && effectTrusted) {
+      status = 'improvement';
+      details =
+        `statistically supported improvement: delta=${rawDelta.toFixed(1)}%, p=${pValue.toFixed(4)}, ` +
+        `d=${effectSize.toFixed(2)}, effectZ=${z.toFixed(1)} (≥${minEffectZ}), ` +
+        `baseline CV=${common.baselineCV !== null ? (common.baselineCV * 100).toFixed(1) + '%' : 'n/a'}`;
+    } else if (-rawDelta >= warnPct) {
+      status = 'likely-noise';
+      details = `delta=${rawDelta.toFixed(1)}% is a likely-noise change from a ${common.baselineAgeDays !== null ? common.baselineAgeDays + ' day old' : 'unknown-age'} baseline`;
+      const failures: string[] = [];
+      if (!magnitudeReachedFail) failures.push(`|delta| ${Math.abs(rawDelta).toFixed(1)}% < fail ${failPct}%`);
+      if (!significant) failures.push('not statistically significant');
+      if (!fresh) failures.push('baseline stale or unknown age');
+      if (!envTrusted) failures.push('environment fingerprint unknown or mismatched');
+      if (!stableEnough) failures.push('baseline CV extreme without ≥3σ effect');
+      if (!effectTrusted) failures.push(`effectZ=${z.toFixed(1)} < ${minEffectZ}`);
+      details += failures.length ? ` — not certified as improvement: ${failures.join('; ')}` : '';
+    } else {
+      status = 'pass';
+      details = `delta=${rawDelta.toFixed(1)}% within thresholds (improvement side)`;
+    }
+  }
+
+  const base: ChangeClassification = {
+    ...common,
+    status,
+    deltaPercent: pctNull ? null : rawDelta,
+    absDelta,
+    pValue,
+    effectSize,
+    effectZ: z,
+    confidenceInterval,
+    stabilityTier: stability,
+    details,
+  };
+
+  if (thresholds.maxStatus === 'warning' && status === 'regression') {
+    return { ...base, status: 'warning', details: base.details + ' [capped at warning by maxStatus]' };
+  }
+  if (thresholds.maxStatus === 'pass' && (status === 'regression' || status === 'warning')) {
+    return { ...base, status: 'pass', details: base.details + ' [capped at pass by maxStatus]' };
+  }
+  return base;
 }
