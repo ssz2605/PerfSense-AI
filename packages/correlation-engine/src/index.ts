@@ -125,18 +125,45 @@ const METRIC_EVIDENCE_AFFINITY: Record<string, EvidenceType[]> = {
  * corresponding code path, so a git diff that changes a file matching those
  * markers can be scored as causal for that metric. This is not a per-PR or
  * per-metric mapping; it is a family-level affinity model.
+ *
+ * Markers are substring-matched against changed file paths, so they name the
+ * files that own each measurement seam (see PERFSENSE-BASELINE.md):
+ * `js/loader.js` + `js/activity.js` own startup, `js/SaveInterface.js` owns
+ * project load/save/export, `js/logo.js` owns the block-queue interpreter and the
+ * `synth.transport.schedule` seam, `js/turtles.js` owns turtle lifetime and queue
+ * depth, and `js/turtle-singer.js` + `js/utils/synthutils.js` own synthesis.
+ *
+ * A metric whose family is missing resolves to zero markers, which demotes every
+ * perf-sensitive diff hit to `weak`, nulls `likelyCause`, and hands the metric to
+ * the AI with an empty evidence list. Every measured metric therefore needs a
+ * family here.
  */
 const METRIC_CODE_PATH_AFFINITY: Record<string, string[]> = {
+  // Startup (index.html).
+  bootstrap: ['loader', 'activity', 'bootstrap'],
+  init:     ['loader', 'activity', 'init'],
+  heap:     ['loader', 'activity', 'turtles'],
+  // Project load / save / export (js/SaveInterface.js owns all three).
   export:   ['save', 'export', 'serialize', 'midi'],
   midi:     ['save', 'export', 'serialize', 'midi'],
   save:     ['save', 'export', 'serialize'],
-  load:     ['load', 'open', 'deserialize', 'project'],
-  open:     ['load', 'open', 'project', 'deserialize'],
-  project:  ['load', 'open', 'project', 'deserialize'],
-  playback: ['audio', 'play', 'sound', 'singer', 'turtle'],
-  latency:  ['audio', 'play', 'sound', 'singer', 'latency'],
-  audio:    ['audio', 'play', 'sound', 'singer', 'synth'],
-  drift:    ['audio', 'play', 'sound', 'singer', 'clock', 'timer'],
+  load:     ['load', 'open', 'deserialize', 'project', 'saveinterface'],
+  open:     ['load', 'open', 'project', 'deserialize', 'saveinterface'],
+  project:  ['load', 'open', 'project', 'deserialize', 'saveinterface'],
+  // Interpreter execution (js/logo.js runs the queue, js/turtles.js owns it).
+  execution: ['logo', 'turtle', 'block'],
+  queue:     ['logo', 'turtle'],
+  depth:     ['logo', 'turtle'],
+  blocks:    ['block', 'logo'],
+  memory:    ['turtle', 'logo', 'activity'],
+  // Tone.js transport seam (js/logo.js schedules onto it).
+  playback: ['audio', 'play', 'sound', 'singer', 'turtle', 'logo', 'transport'],
+  latency:  ['audio', 'play', 'sound', 'singer', 'latency', 'logo', 'transport'],
+  audio:    ['audio', 'play', 'sound', 'singer', 'synth', 'logo', 'transport'],
+  drift:    ['audio', 'play', 'sound', 'singer', 'clock', 'timer', 'logo', 'transport'],
+  schedule: ['logo', 'synth', 'singer', 'transport'],
+  voice:    ['singer', 'synth', 'logo', 'audio'],
+  // Rendering.
   render:   ['render', 'stage', 'canvas', 'artwork', 'block'],
   stage:    ['stage', 'turtle', 'canvas', 'render', 'block'],
   block:    ['block', 'stack', 'palette', 'artwork', 'turtle'],
@@ -652,5 +679,39 @@ export function correlate(input: CorrelationInput): CorrelationResult {
     metrics,
     crossMetricCauses,
     summary: { totalRegressions, metricsWithCause, metricsInconclusive },
+  };
+}
+
+/**
+ * Narrows a correlation result to the single metric an explanation is about.
+ *
+ * Per-metric AI calls must reuse the metric's real entry — its ranked evidence,
+ * its perf-sensitive highlights, and its likelyCause as computed — instead of a
+ * synthetic stub, or the model is asked to explain a regression without ever
+ * seeing the diff body the deterministic engine already read. Cross-metric
+ * causes are kept only when they name this metric, so the focused view cannot
+ * borrow another metric's attribution.
+ *
+ * Returns null when the metric has no entry (warnings never enter `correlate`);
+ * the caller then owns the fallback shape.
+ */
+export function focusCorrelation(
+  result: CorrelationResult,
+  metric: string,
+): CorrelationResult | null {
+  const key = Object.keys(result.metrics).find((k) => k.toLowerCase() === metric.toLowerCase());
+  if (!key) return null;
+  const entry = result.metrics[key];
+  const crossMetricCauses = result.crossMetricCauses.filter((c) =>
+    c.affectedMetrics.some((m) => m.toLowerCase() === metric.toLowerCase()),
+  );
+  return {
+    metrics: { [key]: entry },
+    crossMetricCauses,
+    summary: {
+      totalRegressions: 1,
+      metricsWithCause: entry.likelyCause ? 1 : 0,
+      metricsInconclusive: entry.likelyCause ? 0 : 1,
+    },
   };
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Evidence, MetricMeta } from '@perfsense/core';
-import { correlate } from './index';
+import { correlate, focusCorrelation } from './index';
 import type { CorrelationInput, ConfidenceTier } from './index';
 
 // ── Helpers ────────────────────────────────────────────────────────────
@@ -693,5 +693,235 @@ describe('git-diff causal localization (generic, no per-PR mappings)', () => {
     expect(rationale).not.toContain('strong');
     expect(rationale).not.toContain('moderate');
     expect(rationale).not.toContain('weak');
+  });
+});
+
+describe('code-path affinity coverage (Music Blocks measurement seams)', () => {
+  // A perf-sensitive added change to a file that owns the metric's seam.
+  function perfChangeOn(file: string, metric: string): Evidence {
+    return makeEvidence({
+      id: 'git-1', type: 'git-diff', metricName: metric,
+      details: {
+        changes: [{ file, status: 'modified', insertions: 1, deletions: 0 }],
+        perfSensitive: [
+          { file, line: 10, description: 'Added scheduling/deferral (setTimeout 2000ms)', direction: 'added' },
+        ],
+      },
+      highlights: [
+        { label: 'Files changed', value: '1 file changed', severity: 'info' },
+        {
+          label: 'Perf-sensitive change',
+          value: `${file}:10: Added scheduling/deferral (setTimeout 2000ms) (added)`,
+          severity: 'warning',
+        },
+      ],
+      summary: `Git diff changes ${file}`,
+    });
+  }
+
+  function slower(metric: string): CorrelationInput['regression'][0] {
+    return {
+      metric,
+      baselineMedian: 100,
+      currentMedian: 150,
+      deltaPercent: 50,
+      pValue: 0.0001,
+      effectSize: 1.1,
+      confidenceInterval: [140, 160],
+    };
+  }
+
+  // Every approved metric name → the file that owns its measurement seam.
+  // A missing family token yields zero markers, a weak tier, a null likelyCause,
+  // and hands the metric to the AI with no evidence — which is how a real
+  // bootstrapTotal regression ended up explained by speculation.
+  const SEAMS: Array<[string, string]> = [
+    ['bootstrapTotal', 'js/loader.js'],
+    ['initTotal', 'js/activity.js'],
+    ['heapAfterBoot', 'js/activity.js'],
+    ['projectLoadTime', 'js/SaveInterface.js'],
+    ['saveTime', 'js/SaveInterface.js'],
+    ['exportMIDITime', 'js/SaveInterface.js'],
+    ['saveAsLilypondTime', 'js/SaveInterface.js'],
+    ['callbackLatencyMean', 'js/logo.js'],
+    ['callbackLatencyMax', 'js/logo.js'],
+    ['cumulativeDrift', 'js/logo.js'],
+    ['voiceOnsetError', 'js/turtle-singer.js'],
+    ['scheduleCount', 'js/logo.js'],
+    ['scheduleLagMean', 'js/logo.js'],
+    ['scheduleLagMax', 'js/logo.js'],
+    ['executionTime', 'js/logo.js'],
+    ['maxQueueDepth', 'js/turtles.js'],
+    ['maxLogicalDepth', 'js/logo.js'],
+    ['blocksExecuted', 'js/blocks.js'],
+    ['memoryDelta', 'js/turtles.js'],
+    ['retainedHeap', 'js/turtles.js'],
+  ];
+
+  it.each(SEAMS)('%s is attributable from a change to %s', (metric, file) => {
+    const result = correlate({
+      regression: [slower(metric)],
+      evidence: [perfChangeOn(file, metric)],
+      metricSchemas: {},
+    });
+    const mc = result.metrics[metric];
+    expect(mc.evidence[0].relevance).toBe('direct');
+    expect(mc.likelyCause).not.toBeNull();
+    expect(mc.likelyCause!.confidence).toBe('direct');
+    expect(mc.likelyCause!.source).toContain(file.split('/').pop());
+  });
+
+  it('resolves the real startup regression: bootstrapTotal +35% from a js/loader.js delay', () => {
+    const result = correlate({
+      regression: [{
+        metric: 'bootstrapTotal',
+        baselineMedian: 5500.4,
+        currentMedian: 7420,
+        deltaPercent: 34.9,
+        pValue: 0.0001,
+        effectSize: 1.0,
+        confidenceInterval: [7300, 7550],
+      }],
+      evidence: [perfChangeOn('js/loader.js', 'bootstrapTotal')],
+      metricSchemas: {},
+    });
+    const mc = result.metrics.bootstrapTotal;
+    expect(mc.likelyCause).not.toBeNull();
+    expect(mc.likelyCause!.confidence).toBe('direct');
+    expect(mc.likelyCause!.causeEvidence!.file).toBe('js/loader.js');
+    expect(mc.likelyCause!.causeEvidence!.direction).toBe('added');
+  });
+
+  it('still refuses an off-seam file for a startup metric (no false positive)', () => {
+    const result = correlate({
+      regression: [slower('bootstrapTotal')],
+      evidence: [perfChangeOn('js/artwork.js', 'bootstrapTotal')],
+      metricSchemas: {},
+    });
+    expect(result.metrics.bootstrapTotal.likelyCause).toBeNull();
+    expect(result.metrics.bootstrapTotal.evidence[0].relevance).toBe('weak');
+  });
+
+  it('still refuses an off-seam file for an interpreter metric (no false positive)', () => {
+    const result = correlate({
+      regression: [slower('executionTime')],
+      evidence: [perfChangeOn('js/SaveInterface.js', 'executionTime')],
+      metricSchemas: {},
+    });
+    expect(result.metrics.executionTime.likelyCause).toBeNull();
+  });
+
+  it('projectLoadTime is attributable to js/SaveInterface.js, which owns project loading', () => {
+    const result = correlate({
+      regression: [slower('projectLoadTime')],
+      evidence: [perfChangeOn('js/SaveInterface.js', 'projectLoadTime')],
+      metricSchemas: {},
+    });
+    expect(result.metrics.projectLoadTime.likelyCause).not.toBeNull();
+  });
+});
+
+describe('focusCorrelation', () => {
+  // Two regressions sharing one git-diff item that touches neither seam, so both
+  // stay unexplained while still carrying the evidence the engine read.
+  const full = (): ReturnType<typeof correlate> =>
+    correlate({
+      regression: [
+        { metric: 'bootstrapTotal', baselineMedian: 5500, currentMedian: 7420, deltaPercent: 34.9, pValue: 0.001, effectSize: 1, confidenceInterval: [7300, 7550] },
+        { metric: 'executionTime', baselineMedian: 20113, currentMedian: 25100, deltaPercent: 24.8, pValue: 0.001, effectSize: 1, confidenceInterval: [24000, 26000] },
+      ],
+      evidence: [
+        makeEvidence({
+          id: 'git-1', type: 'git-diff', metricName: 'bootstrapTotal',
+          details: {
+            changes: [{ file: 'js/artwork.js', status: 'modified', insertions: 1, deletions: 0 }],
+            perfSensitive: [{ file: 'js/artwork.js', line: 4, description: 'Added DOM work (added)', direction: 'added' }],
+          },
+          highlights: [
+            { label: 'Perf-sensitive change', value: 'js/artwork.js:4: Added DOM work (added)', severity: 'warning' },
+          ],
+          summary: 'Git diff changes js/artwork.js',
+        }),
+      ],
+      metricSchemas: {},
+    });
+
+  it('keeps the metric\'s real evidence instead of an empty stub', () => {
+    const focused = focusCorrelation(full(), 'bootstrapTotal')!;
+    expect(focused).not.toBeNull();
+    expect(Object.keys(focused.metrics)).toEqual(['bootstrapTotal']);
+    // Unexplained, but the diff body is still there for the model to read.
+    expect(focused.metrics.bootstrapTotal.likelyCause).toBeNull();
+    expect(focused.metrics.bootstrapTotal.evidence.length).toBe(1);
+    expect(focused.metrics.bootstrapTotal.evidence[0].id).toBe('git-1');
+    expect(focused.summary).toEqual({ totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 1 });
+  });
+
+  it('narrows to one metric so an explanation cannot borrow another attribution', () => {
+    const focused = focusCorrelation(full(), 'executionTime')!;
+    expect(Object.keys(focused.metrics)).toEqual(['executionTime']);
+    expect(focused.metrics.bootstrapTotal).toBeUndefined();
+    expect(focused.metrics.executionTime.likelyCause).toBeNull();
+  });
+
+  it('matches the metric case-insensitively', () => {
+    expect(focusCorrelation(full(), 'bootstraptotal')).not.toBeNull();
+  });
+
+  it('returns null for a metric correlate never saw (warnings)', () => {
+    expect(focusCorrelation(full(), 'initTotal')).toBeNull();
+  });
+
+  it('reports a cause in the summary when the focused metric has one', () => {
+    const result = correlate({
+      regression: [{ metric: 'bootstrapTotal', baselineMedian: 5500, currentMedian: 7420, deltaPercent: 34.9, pValue: 0.001, effectSize: 1, confidenceInterval: [7300, 7550] }],
+      evidence: [
+        makeEvidence({
+          id: 'git-1', type: 'git-diff', metricName: 'bootstrapTotal',
+          details: {
+            changes: [{ file: 'js/loader.js', status: 'modified', insertions: 1, deletions: 0 }],
+            perfSensitive: [{ file: 'js/loader.js', line: 10, description: 'Added scheduling/deferral (setTimeout 2000ms)', direction: 'added' }],
+          },
+          highlights: [
+            { label: 'Perf-sensitive change', value: 'js/loader.js:10: Added scheduling/deferral (setTimeout 2000ms) (added)', severity: 'warning' },
+          ],
+        }),
+      ],
+      metricSchemas: {},
+    });
+    const focused = focusCorrelation(result, 'bootstrapTotal')!;
+    expect(focused.metrics.bootstrapTotal.likelyCause).not.toBeNull();
+    expect(focused.summary).toEqual({ totalRegressions: 1, metricsWithCause: 1, metricsInconclusive: 0 });
+  });
+
+  it('keeps a cross-metric cause that names this metric and drops the ones that do not', () => {
+    // bootstrapTotal and initTotal are both explained by the same js/loader.js
+    // change, so correlate() merges them into one cross-metric cause.
+    const result = correlate({
+      regression: [
+        { metric: 'bootstrapTotal', baselineMedian: 5500, currentMedian: 7420, deltaPercent: 34.9, pValue: 0.001, effectSize: 1, confidenceInterval: [7300, 7550] },
+        { metric: 'initTotal', baselineMedian: 255, currentMedian: 340, deltaPercent: 33.3, pValue: 0.001, effectSize: 1, confidenceInterval: [330, 350] },
+        { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 1600, deltaPercent: 60, pValue: 0.001, effectSize: 1, confidenceInterval: [1500, 1700] },
+      ],
+      evidence: [
+        makeEvidence({
+          id: 'git-1', type: 'git-diff', metricName: 'bootstrapTotal',
+          details: {
+            changes: [{ file: 'js/loader.js', status: 'modified', insertions: 1, deletions: 0 }],
+            perfSensitive: [{ file: 'js/loader.js', line: 10, description: 'Added scheduling/deferral (setTimeout 2000ms)', direction: 'added' }],
+          },
+          highlights: [
+            { label: 'Perf-sensitive change', value: 'js/loader.js:10: Added scheduling/deferral (setTimeout 2000ms) (added)', severity: 'warning' },
+          ],
+        }),
+      ],
+      metricSchemas: {},
+    });
+    const focused = focusCorrelation(result, 'bootstrapTotal')!;
+    expect(focused.crossMetricCauses.length).toBe(1);
+    expect(focused.crossMetricCauses[0].affectedMetrics).toEqual(
+      expect.arrayContaining(['bootstrapTotal', 'initTotal']),
+    );
+    expect(focused.crossMetricCauses[0].affectedMetrics).not.toContain('exportMIDITime');
   });
 });

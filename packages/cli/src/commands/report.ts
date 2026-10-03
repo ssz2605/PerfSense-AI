@@ -5,7 +5,7 @@ import type {
   CheckStatus, Evidence, ThresholdLevel, ContractSummary,
 } from '@perfsense/core';
 import { median, classifyChange, type ChangeClassification } from '@perfsense/statistics';
-import { correlate, type CorrelationResult, type RegressionEntry, type CorrelationInput } from '@perfsense/correlation-engine';
+import { correlate, focusCorrelation, type CorrelationResult, type RegressionEntry, type CorrelationInput } from '@perfsense/correlation-engine';
 import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
 import { generatePRComment, type CheckResult, type CheckResultEntry, type PRReportOptions } from '@perfsense/reporter-github';
 import { buildContract } from './contract';
@@ -353,30 +353,32 @@ export async function run(argv: string[]): Promise<void> {
           if (!isUnexplainedRegression && !isUnexplainedWarning) continue;
           if (entry.baselineMedian === null || entry.currentMedian === null) continue;
           try {
-            const focused = await generateAIAnalysis(
-              {
-                metrics: {
-                  [entry.metric]: {
-                    regression: {
-                      metric: entry.metric,
-                      baselineMedian: entry.baselineMedian,
-                      currentMedian: entry.currentMedian,
-                      deltaPercent: entry.deltaPercent ?? 0,
-                      pValue: entry.pValue ?? 0.05,
-                      effectSize: entry.effectSize ?? 0.147,
-                      confidenceInterval: entry.confidenceInterval ?? [entry.currentMedian * 0.9, entry.currentMedian * 1.1],
-                    },
-                    evidence: [],
-                    likelyCause: null,
-                    filteredEvidence: 0,
+            // Regressions keep the correlation entry the deterministic engine
+            // already built, so the model sees the same ranked evidence and
+            // perf-sensitive highlights the engine rejected. Only warnings —
+            // which never enter correlate() — fall back to a synthesized view.
+            const realCorrelation = correlation ? focusCorrelation(correlation, entry.metric) : null;
+            const focusedCorrelation: CorrelationResult = realCorrelation ?? {
+              metrics: {
+                [entry.metric]: {
+                  regression: {
+                    metric: entry.metric,
+                    baselineMedian: entry.baselineMedian,
+                    currentMedian: entry.currentMedian,
+                    deltaPercent: entry.deltaPercent ?? computeDeltaPercent(entry.baselineMedian, entry.currentMedian),
+                    pValue: entry.pValue ?? 0.05,
+                    effectSize: entry.effectSize ?? 0.147,
+                    confidenceInterval: (entry.confidenceInterval ?? [entry.currentMedian * 0.9, entry.currentMedian * 1.1]) as [number, number],
                   },
+                  evidence: [],
+                  likelyCause: null,
+                  filteredEvidence: 0,
                 },
-                crossMetricCauses: [],
-                summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 1 },
               },
-              gitContext,
-              aiConfig,
-            );
+              crossMetricCauses: [],
+              summary: { totalRegressions: 1, metricsWithCause: 0, metricsInconclusive: 1 },
+            };
+            const focused = await generateAIAnalysis(focusedCorrelation, gitContext, aiConfig);
             if (focused) perMetric[entry.metric] = focused.explanation;
           } catch { /* per-metric AI failed silently; the block falls back to "No likely cause." */ }
         }
