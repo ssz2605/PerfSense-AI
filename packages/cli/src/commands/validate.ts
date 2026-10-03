@@ -354,10 +354,15 @@ export function renderValidity(baseline: BaselineData, validity: BaselineValidit
   );
   const throttle = baseline.env?.cpuQuota;
   if (throttle) {
-    lines.push(
-      `Runner CPU quota: ${throttle.quotaCpus ?? 'unrestricted'} cores ` +
-        `(${throttle.source}), throttled=${throttle.throttled}`,
-    );
+    // `null` cores means "no limit found", which is not the same claim as
+    // "no limit exists" — say which one this is.
+    const quota =
+      throttle.quotaCpus === null
+        ? throttle.source === 'unavailable'
+          ? 'unknown'
+          : 'unrestricted'
+        : `${throttle.quotaCpus} cores`;
+    lines.push(`Runner CPU quota: ${quota} (${throttle.source}), throttled=${throttle.throttled}`);
   }
   if (baseline.env?.loadAvg1m !== undefined) {
     lines.push(`Runner 1-minute load average at capture: ${baseline.env.loadAvg1m}`);

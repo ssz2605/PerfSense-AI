@@ -355,6 +355,17 @@ describe('renderValidity', () => {
     expect(out).toContain('throttled=false');
   });
 
+  it('does not claim an unreadable quota is unrestricted', () => {
+    const unknown: EnvironmentFingerprint = {
+      ...ENV,
+      cpuQuota: { quotaCpus: null, throttled: null, source: 'unavailable' },
+    };
+    const b = baseline(healthyPages(), { env: unknown });
+    const out = renderValidity(b, validateBaseline(b));
+    expect(out).toContain('Runner CPU quota: unknown (unavailable)');
+    expect(out).not.toContain('unrestricted');
+  });
+
   it('says explicitly when the capture ran without a harness ref', () => {
     const unfingerprinted = baseline(healthyPages(), {
       harness: { ref: null, source: 'unavailable', reason: 'PERFSENSE_REF is not set.' },

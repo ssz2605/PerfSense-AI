@@ -220,6 +220,49 @@ describe('summary statuses and compact details', () => {
   });
 });
 
+describe('baseline provenance banner', () => {
+  const withHarness = (state: 'match' | 'mismatch' | 'unknown', baselineRef: string | null, runRef: string | null): CheckResult => ({
+    results: [makeEntry({ metric: 'bootstrapTotal', status: 'INCONCLUSIVE', deltaPercent: 29.8, note: 'harness mismatch' })],
+    summary: { pass: 0, warning: 0, regression: 0, failed: false, inconclusive: 1 },
+    baselineMeta: { envMatched: true, ageDays: 1, stale: false, hasEnv: true, harness: { baselineRef, runRef, state } },
+  });
+
+  it('blocks comparison outright when the baseline came from another harness', () => {
+    const comment = generatePRComment(withHarness('mismatch', '53ae5d2', '8c57213'), PR_27);
+    expect(comment).toContain('Baseline was captured with a different PerfSense revision');
+    expect(comment).toContain('`53ae5d2`');
+    expect(comment).toContain('`8c57213`');
+    expect(comment).toContain('every verdict is withheld');
+  });
+
+  it('says nothing when both sides ran the same harness', () => {
+    const comment = generatePRComment(withHarness('match', '8c57213', '8c57213'), PR_27);
+    expect(comment).not.toContain('different PerfSense revision');
+  });
+
+  it('warns without blocking when the baseline recorded no revision', () => {
+    const comment = generatePRComment(withHarness('unknown', null, '8c57213'), PR_27);
+    expect(comment).toContain('Baseline records no PerfSense revision');
+    expect(comment).not.toContain('every verdict is withheld');
+  });
+
+  it('stays silent when neither side is in the workflow', () => {
+    const comment = generatePRComment(withHarness('unknown', null, null), PR_27);
+    expect(comment).not.toContain('PerfSense revision');
+  });
+
+  it('renders nothing when no harness metadata is supplied at all', () => {
+    const result: CheckResult = {
+      results: [makeEntry({})],
+      summary: { pass: 1, warning: 0, regression: 0, failed: false },
+      baselineMeta: { envMatched: null, ageDays: null, stale: false, hasEnv: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).not.toContain('PerfSense revision');
+    expect(comment).toContain('legacy v1');
+  });
+});
+
 describe('report structure', () => {
   it('contains header context and required sections in order', () => {
     const result: CheckResult = {
