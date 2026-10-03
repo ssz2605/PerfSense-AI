@@ -56,17 +56,22 @@ function readIfPresent(file: string): string | undefined {
 export function detectCpuThrottle(cores?: number): CpuThrottle {
   const visible = cores ?? os.cpus().length;
   const v2 = readIfPresent('/sys/fs/cgroup/cpu.max');
-  const quotaCpus = parseCpuQuota(v2, undefined, undefined);
-  const source: CpuThrottle['source'] = v2 !== undefined ? 'cgroup-v2' : 'unavailable';
+  let quotaCpus = parseCpuQuota(v2, undefined, undefined);
+  let source: CpuThrottle['source'] = v2 !== undefined ? 'cgroup-v2' : 'unavailable';
 
   if (v2 === undefined) {
     const v1Quota = readIfPresent('/sys/fs/cgroup/cpu/cpu.cfs_quota_us');
     const v1Period = readIfPresent('/sys/fs/cgroup/cpu/cpu.cfs_period_us');
     if (v1Quota !== undefined && v1Period !== undefined) {
-      return { quotaCpus: parseCpuQuota(undefined, v1Quota, v1Period), throttled: null, source: 'cgroup-v1' };
+      quotaCpus = parseCpuQuota(undefined, v1Quota, v1Period);
+      source = 'cgroup-v1';
     }
   }
 
+  // Both cgroup versions answer the same question the same way. Deriving
+  // `throttled` only on the v2 path meant a v1 host reported "unknown" even
+  // with a quota in hand, so the contention check silently did nothing on every
+  // v1 host — the one case where a runner is most likely to be constrained.
   if (quotaCpus === null) return { quotaCpus: null, throttled: null, source };
   return { quotaCpus, throttled: visible > 0 && quotaCpus < visible, source };
 }

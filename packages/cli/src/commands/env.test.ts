@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import type { BaselineData, EnvironmentFingerprint } from '@perfsense/core';
+import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import type { BaselineData, CpuThrottle, EnvironmentFingerprint } from '@perfsense/core';
 import {
   parseCpuQuota,
   detectCpuThrottle,
@@ -70,6 +71,51 @@ describe('detectCpuThrottle', () => {
     // has to be "unknown" so a real throttle is not silently ruled out.
     const result = detectCpuThrottle(2);
     if (result.source === 'unavailable') expect(result.throttled).toBeNull();
+  });
+
+  // The v2 and v1 paths must answer the same question the same way. These
+  // inject the cgroup files rather than mocking fs so the branch that actually
+  // runs is the one under test.
+  describe('cgroup v1 parity with v2', () => {
+    const withCgroup = (files: Record<string, string>, cores: number): CpuThrottle => {
+      const real = fs.readFileSync;
+      const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(((
+        p: string,
+        ...rest: unknown[]
+      ): unknown => {
+        const key = String(p);
+        return key in files ? files[key] : (real as (...a: unknown[]) => unknown)(p, ...rest);
+      }) as unknown as typeof fs.readFileSync);
+      try {
+        return detectCpuThrottle(cores);
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    const V1 = '/sys/fs/cgroup/cpu/cpu.cfs_quota_us';
+    const V1P = '/sys/fs/cgroup/cpu/cpu.cfs_period_us';
+
+    it('reports a v1 quota below the core count as throttled', () => {
+      // 4 visible cores, 2 cores of quota: every metric inflates together.
+      const result = withCgroup({ [V1]: '200000\n', [V1P]: '100000\n' }, 4);
+      expect(result.source).toBe('cgroup-v1');
+      expect(result.quotaCpus).toBe(2);
+      expect(result.throttled).toBe(true);
+    });
+
+    it('reports a v1 quota at or above the core count as unthrottled', () => {
+      const result = withCgroup({ [V1]: '400000\n', [V1P]: '100000\n' }, 4);
+      expect(result.source).toBe('cgroup-v1');
+      expect(result.quotaCpus).toBe(4);
+      expect(result.throttled).toBe(false);
+    });
+
+    it('reports a v1 unlimited quota as unknown, not unthrottled', () => {
+      const result = withCgroup({ [V1]: '-1\n', [V1P]: '100000\n' }, 4);
+      expect(result.source).toBe('cgroup-v1');
+      expect(result.throttled).toBeNull();
+    });
   });
 });
 
