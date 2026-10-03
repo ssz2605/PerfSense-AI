@@ -273,6 +273,52 @@ describe('validateBaseline', () => {
     expect(result.ok).toBe(true);
   });
 
+  describe('count-metric quantization floor', () => {
+    it('does not fail a count metric whose limit is finer than one unit', () => {
+      // Real case: crabcanon maxQueueDepth median 8, p10 8 -> p90 10 is a
+      // one-unit rounding step, but a 20% limit reads it as 25% of noise.
+      const pages = healthyPages();
+      pages['crabcanon-plot.html'].maxQueueDepth = stats([8, 8, 8, 10, 10]);
+      const result = validateBaseline(baseline(pages), {
+        validity: { maxSpreadPct: { maxQueueDepth: 20 } },
+      });
+      expect(findDefect(result, 'maxQueueDepth', 'spread')).toBeUndefined();
+      expect(result.ok).toBe(true);
+    });
+
+    it('still reports the misconfiguration when the spread is real', () => {
+      const pages = healthyPages();
+      pages['crabcanon-plot.html'].maxQueueDepth = stats([2, 7, 8, 9, 15]);
+      const result = validateBaseline(baseline(pages), {
+        validity: { maxSpreadPct: { maxQueueDepth: 20 } },
+      });
+      const d = findDefect(result, 'maxQueueDepth', 'spread');
+      expect(d?.severity).toBe('warn');
+      expect(d?.detail).toContain('quantization floor');
+      expect(result.ok).toBe(true);
+    });
+
+    it('gates a count metric normally once its limit clears the floor', () => {
+      // Median 8 -> floor 25%, so a 40% limit is a genuine tolerance.
+      const pages = healthyPages();
+      pages['crabcanon-plot.html'].maxQueueDepth = stats([4, 5, 6, 12, 14]);
+      const result = validateBaseline(baseline(pages), {
+        validity: { maxSpreadPct: { maxQueueDepth: 40 } },
+      });
+      expect(findDefect(result, 'maxQueueDepth', 'spread')?.severity).toBe('fail');
+      expect(result.ok).toBe(false);
+    });
+
+    it('does not exempt a continuous metric with the same shape', () => {
+      const pages = healthyPages();
+      pages['index.html'].initTotal = stats([100, 101, 102, 140, 141]);
+      const result = validateBaseline(baseline(pages), {
+        validity: { maxSpreadPct: { initTotal: 5 } },
+      });
+      expect(findDefect(result, 'initTotal', 'spread')?.severity).toBe('fail');
+    });
+  });
+
   describe('divergence against the baseline being replaced', () => {
     const previous = baseline(healthyPages());
 

@@ -7,7 +7,7 @@ import type {
   ValidityConfig,
 } from '@perfsense/core';
 import { median } from '@perfsense/statistics';
-import { BENCHMARK_MATRIX, isMetricApproved } from '@perfsense/benchmark-matrix';
+import { BENCHMARK_MATRIX, isMetricApproved, getMetricUnit } from '@perfsense/benchmark-matrix';
 import { environmentsMatch } from './env';
 import { loadConfig } from './report';
 
@@ -118,6 +118,25 @@ function spreadPercent(stats: BaselineMetricStatsV2): number | null {
   return ((stats.p90 - stats.p10) / Math.abs(stats.median)) * 100;
 }
 
+/**
+ * Smallest spread percentage an integer-count metric can express, or null for
+ * a continuous metric.
+ *
+ * A count cannot move in fractions, so at a median of 8 one unit is already
+ * 12.5% and a p10→p90 span of two units is 25%. A percentage limit set below
+ * that floor is not a noise tolerance at all: it fires on a single rounding
+ * step. That is the same reasoning as the continuous resolution floor, applied
+ * to the metric's own unit — a metric that cannot express the difference must
+ * not be failed for expressing it.
+ */
+function quantizationFloorPct(metric: string, stats: BaselineMetricStatsV2): number | null {
+  if (getMetricUnit(metric) !== 'count') return null;
+  if (!isFinite(stats.median) || stats.median === 0) return null;
+  // Two units, because p10 and p90 straddle the median and so differ by at
+  // least one step on each side.
+  return (2 / Math.abs(stats.median)) * 100;
+}
+
 export interface ValidateOptions {
   /** Baseline currently on record, for the same-commit divergence check. */
   previous?: BaselineData;
@@ -223,6 +242,28 @@ export function validateBaseline(
       // that is already reported as incapable.
       if (belowResolution || inert) continue;
 
+      const limit = limits[metric];
+      const quantFloor = quantizationFloorPct(metric, stats);
+      // A count metric whose limit sits under its own quantization floor cannot
+      // be gated by that limit: the limit is finer than one unit, so it fires on
+      // rounding. That applies to the bimodality test too — splitting 8|10 is one
+      // unit, not two measurement conditions. Reported rather than silently
+      // passed, so the misconfiguration stays visible.
+      if (limit !== undefined && quantFloor !== null && limit < quantFloor) {
+        if (spread === null || spread <= quantFloor) continue;
+        defects.push({
+          fixture: contract.fixture,
+          metric,
+          kind: 'spread',
+          severity: 'warn',
+          detail:
+            `observed spread ${fmtPct(spread)} exceeds the configured limit of ${limit}%, but that ` +
+            `limit is below this metric's quantization floor of ${fmtPct(quantFloor)} ` +
+            `(median ${fmtNum(stats.median)}); not gated`,
+        });
+        continue;
+      }
+
       const split = detectBimodality(stats.values, cfg.bimodalGapRatio, cfg.bimodalShiftPct);
       if (split?.bimodal) {
         defects.push({
@@ -238,7 +279,6 @@ export function validateBaseline(
       }
 
       if (spread === null) continue;
-      const limit = limits[metric];
       if (limit === undefined) {
         if (spread < cfg.spreadNoticePct) continue;
         defects.push({
