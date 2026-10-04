@@ -143,6 +143,24 @@ export interface ValidateOptions {
   validity?: ValidityConfig;
 }
 
+function addExerciseDefect(
+  defects: BaselineDefect[],
+  fixture: string,
+  metric: string,
+  stats: BaselineMetricStatsV2 | undefined,
+  invalid: (stats: BaselineMetricStatsV2) => boolean,
+  detail: string,
+): void {
+  if (!stats || !invalid(stats)) return;
+  defects.push({
+    fixture,
+    metric,
+    kind: "zero-variance",
+    severity: "fail",
+    detail,
+  });
+}
+
 /**
  * Audits a freshly captured baseline and reports every defect that would make
  * it unsafe to compare against. The output is a list, not a boolean: the caller
@@ -172,6 +190,34 @@ export function validateBaseline(
         'Re-capture on an unconstrained runner.',
     });
   }
+
+  const frere = baseline.pages["Frere-Jacques.html"];
+  addExerciseDefect(
+    defects,
+    "Frere-Jacques.html",
+    "transportEventCount",
+    frere && findCell(frere, "transportEventCount"),
+    stats => stats.median === 0 || stats.values.some(value => value === 0),
+    "transport seam not exercised in this environment",
+  );
+
+  const rainbow = baseline.pages["RainbowConnection.html"];
+  addExerciseDefect(
+    defects,
+    "RainbowConnection.html",
+    "refreshCanvasCallCount",
+    rainbow && findCell(rainbow, "refreshCanvasCallCount"),
+    stats => stats.median === 0 || stats.values.some(value => value === 0),
+    "project refresh path not exercised in this environment",
+  );
+  addExerciseDefect(
+    defects,
+    "RainbowConnection.html",
+    "maxDepth",
+    rainbow && findCell(rainbow, "maxDepth"),
+    stats => stats.median < 2 || stats.values.some(value => value < 2),
+    "headless export fast-run path not exercised in this environment",
+  );
 
   for (const contract of BENCHMARK_MATRIX) {
     const page = baseline.pages[contract.fixture];

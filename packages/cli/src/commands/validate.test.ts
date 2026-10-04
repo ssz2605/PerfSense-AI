@@ -264,6 +264,22 @@ describe("validateBaseline", () => {
     expect(result.defects.filter((d) => d.severity === "fail")).toHaveLength(0);
   });
 
+  it("fails captures that do not exercise required transport, refresh, or export paths", () => {
+    const pages = healthyPages();
+    pages["Frere-Jacques.html"].transportEventCount = stats([268, 0, 268, 268, 268]);
+    pages["RainbowConnection.html"].refreshCanvasCallCount = stats([0, 0, 0, 0, 0]);
+    pages["RainbowConnection.html"].maxDepth = stats([1, 1, 1, 1, 1]);
+
+    const result = validateBaseline(baseline(pages));
+
+    expect(result.ok).toBe(false);
+    for (const metric of ["transportEventCount", "refreshCanvasCallCount", "maxDepth"]) {
+      const defect = findDefect(result, metric, "zero-variance");
+      expect(defect?.severity).toBe("fail");
+      expect(defect?.detail).toContain("not exercised");
+    }
+  });
+
   it("warns rather than fails a spread with no configured limit", () => {
     const result = validateBaseline(baseline(healthyPages()));
     const warn = findDefect(result, "saveTime", "spread");
