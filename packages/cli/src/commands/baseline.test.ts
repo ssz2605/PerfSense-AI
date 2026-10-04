@@ -104,11 +104,11 @@ describe('baseline save contract', () => {
       'callbackLatencyMax',
       'callbackLatencyMean',
     ]);
-    // scheduleLagMean/scheduleLagMax left the crabcanon contract, so they are
-    // dropped even though the raw run collected them.
+    // scheduleLagMean/scheduleLagMax left the crabcanon contract and
+    // stageUpdateTime/stageUpdateMax followed them, so all three are dropped
+    // even though the raw run collected them.
     expect(Object.keys(baseline.pages['crabcanon-plot.html']).sort()).toEqual([
       'cacheRebuildCount',
-      'stageUpdateTime',
       'viewportCulledBlocks',
     ]);
     // maxActionDepth never appears in the baseline.
@@ -123,10 +123,12 @@ describe('baseline save contract', () => {
           run: i + 1,
           metrics: {
             projectLoadTime: FIVE_RUNS[i],
-            // Unauthorized for Rainbow (musical-tree owns memory coverage).
+            // Unauthorized for Rainbow (musical-tree owns memory coverage,
+            // and the heap probes were retired from that contract too).
             memoryDelta: 1000 + i,
-            // Approved: LilyPond notation export, part of Rainbow's export class.
-            saveAsLilypondTime: FIVE_RUNS[i] + 400,
+            // Approved: peak heap across the export pass, part of Rainbow's
+            // export class.
+            peakHeapDuringExport: FIVE_RUNS[i] + 400,
           },
         })),
       },
@@ -149,12 +151,12 @@ describe('baseline save contract', () => {
     expect(stats.cv).toBeLessThan(0.05);
     expect(stats.stability.tier).toBe('stable');
     expect(stats.stability.flagged).toBe(false);
-    // The approved LilyPond export metric is kept like the other Rainbow metrics.
-    const lilypondStats = baseline.pages['RainbowConnection.html'].saveAsLilypondTime;
-    expect(lilypondStats.values).toHaveLength(5);
-    expect(lilypondStats.median).toBe(1400);
-    // memoryDelta is not approved for Rainbow (musical-tree owns the memory
-    // metrics), so the decoy value must be rejected at baseline-save time.
+    // The approved peak-heap export metric is kept like the other Rainbow metrics.
+    const heapStats = baseline.pages['RainbowConnection.html'].peakHeapDuringExport;
+    expect(heapStats.values).toHaveLength(5);
+    expect(heapStats.median).toBe(1400);
+    // memoryDelta is not approved for any fixture any more, so the decoy value
+    // must be rejected at baseline-save time.
     expect(baseline.pages['RainbowConnection.html'].memoryDelta).toBeUndefined();
   });
 });

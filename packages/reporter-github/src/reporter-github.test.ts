@@ -7,7 +7,7 @@ const PR_27 = { pr: '27', head: 'c46d920', baselineRef: 'origin/master', matrix:
 function makeEntry(partial?: Partial<CheckResult['results'][number]>) {
   return {
     page: 'RainbowConnection.html',
-    metric: 'exportMIDITime',
+    metric: 'saveTime',
     status: 'PASS' as const,
     deltaPercent: 0,
     absDelta: 0,
@@ -34,23 +34,23 @@ function makeCause(partial?: Partial<LikelyCause>): LikelyCause {
     confidence: 'direct',
     evidenceIds: ['git-export'],
     rationale:
-      'The diff changes js/SaveInterface.js:42, which is on the code path measured by exportMIDITime. ' +
+      'The diff changes js/SaveInterface.js:42, which is on the code path measured by saveTime. ' +
       'The change is performance-sensitive: Scheduling delay increased (500ms → 2500ms). ' +
-      'The change adds work or delay, which is consistent with the observed +159.4% slower result for exportMIDITime.',
+      'The change adds work or delay, which is consistent with the observed +159.4% slower result for saveTime.',
     causeEvidence: {
       file: 'js/SaveInterface.js',
       line: 42,
       function: 'afterSaveMIDI()',
       changeType: 'Scheduling delay increased (500ms → 2500ms)',
       direction: 'increased',
-      metric: 'exportMIDITime',
+      metric: 'saveTime',
       deltaPercent: 159.4,
     },
     ...partial,
   };
 }
 
-function makeCorrelation(metric = 'exportMIDITime', cause: LikelyCause | null = makeCause()): CheckResult['correlation'] {
+function makeCorrelation(metric = 'saveTime', cause: LikelyCause | null = makeCause()): CheckResult['correlation'] {
   return {
     metrics: {
       [metric]: {
@@ -131,11 +131,11 @@ describe('summary statuses and compact details', () => {
   it('uses emoji indicators in the overall line and summary rows, text statuses in tables', () => {
     const result: CheckResult = {
       results: [
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'refreshCanvasCallCount', status: 'PASS', deltaPercent: 0 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'WARNING', deltaPercent: 12 }),
         makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7 }),
         // A genuine classified improvement (not inferred from a negative delta).
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'IMPROVEMENT', deltaPercent: -20, currentMedian: 800 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'peakHeapDuringExport', status: 'IMPROVEMENT', deltaPercent: -20, currentMedian: 800 }),
       ],
       summary: { pass: 2, warning: 1, regression: 1, failed: true },
     };
@@ -153,7 +153,7 @@ describe('summary statuses and compact details', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMean', status: 'WARNING', deltaPercent: 42, baselineMedian: 40, currentMedian: 56.8 }),
-        makeEntry({ page: 'Frere-Jacques.html', metric: 'cumulativeDrift', status: 'WARNING', deltaPercent: 18, baselineMedian: 1, currentMedian: 1.18 }),
+        makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMax', status: 'WARNING', deltaPercent: 18, baselineMedian: 1, currentMedian: 1.18 }),
       ],
       summary: { pass: 0, warning: 2, regression: 0, failed: false },
     };
@@ -167,7 +167,7 @@ describe('summary statuses and compact details', () => {
   it('renders only notable fixtures in Details and passes through to the collapsible table', () => {
     const result: CheckResult = {
       results: [
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'PASS', deltaPercent: 0 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'refreshCanvasCallCount', status: 'PASS', deltaPercent: 0 }),
         makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 }),
       ],
       summary: { pass: 2, warning: 0, regression: 0, failed: false },
@@ -388,14 +388,14 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4, baselineMedian: 1678.6, currentMedian: 4354.2 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: makeCorrelation('exportMIDITime', makeCause()),
+      correlation: makeCorrelation('saveTime', makeCause()),
     };
     const comment = generatePRComment(result, PR_27);
-    expect(comment).toContain('🔴 **exportMIDITime** — +159.4%');
+    expect(comment).toContain('🔴 **saveTime** — +159.4%');
     expect(comment).toContain('**Likely cause:** `js/SaveInterface.js:42`');
     expect(comment).toContain('**Function:** afterSaveMIDI()');
     expect(comment).toContain('**AI analysis:**');
-    expect(comment).toContain('on the code path measured by exportMIDITime');
+    expect(comment).toContain('on the code path measured by saveTime');
     expect(comment).toContain('Scheduling delay increased (500ms → 2500ms)');
     expect(comment).toContain('consistent with the observed +159.4% slower result');
   });
@@ -404,7 +404,7 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 50 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: makeCorrelation('exportMIDITime', null),
+      correlation: makeCorrelation('saveTime', null),
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).toContain('**Likely cause:** No likely cause identified.');
@@ -445,7 +445,7 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: makeCorrelation('exportMIDITime', null),
+      correlation: makeCorrelation('saveTime', null),
     };
     const comment = generatePRComment(result, { ...PR_27, aiAnalysis: 'The 2000ms loader deferral in js/loader.js delays bootstrapTotal by ~2000ms.' });
     expect(comment).toContain('<summary>AI analysis</summary>');
@@ -456,7 +456,7 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [makeEntry({ status: 'REGRESSION', deltaPercent: 159.4 })],
       summary: { pass: 0, warning: 0, regression: 1, failed: true },
-      correlation: makeCorrelation('exportMIDITime', null),
+      correlation: makeCorrelation('saveTime', null),
     };
     const comment = generatePRComment(result, PR_27);
     expect(comment).not.toContain('<summary>AI analysis</summary>');
@@ -466,20 +466,20 @@ describe('AI reasoning / root cause', () => {
     const result: CheckResult = {
       results: [
         makeEntry({ page: 'RainbowConnection.html', metric: 'saveTime', status: 'REGRESSION', deltaPercent: 10.1 }),
-        makeEntry({ page: 'RainbowConnection.html', metric: 'exportMIDITime', status: 'REGRESSION', deltaPercent: 159.4 }),
+        makeEntry({ page: 'RainbowConnection.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 159.4 }),
       ],
       summary: { pass: 0, warning: 0, regression: 2, failed: true },
       correlation: {
         metrics: {
           saveTime: { regression: { metric: 'saveTime', baselineMedian: 26.7, currentMedian: 29.4, deltaPercent: 10.1, pValue: 0.001, effectSize: 0.8, confidenceInterval: [26, 32] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
-          exportMIDITime: { regression: { metric: 'exportMIDITime', baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
+          projectLoadTime: { regression: { metric: 'projectLoadTime', baselineMedian: 1000, currentMedian: 2594, deltaPercent: 159.4, pValue: 0.001, effectSize: 0.8, confidenceInterval: [2400, 2800] }, evidence: [], likelyCause: null, filteredEvidence: 0 },
         },
         crossMetricCauses: [
           {
             description: 'Git diff changes the metric\'s measured code path with a perf-sensitive change',
             source: 'js/SaveInterface.js:42',
             confidence: 'direct',
-            affectedMetrics: ['saveTime', 'exportMIDITime'],
+            affectedMetrics: ['saveTime', 'projectLoadTime'],
             evidenceIds: ['git-export'],
           },
         ],

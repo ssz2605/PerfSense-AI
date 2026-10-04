@@ -145,8 +145,10 @@ describe("GitHub Action E2E", () => {
           "ttfb",
           "callbackLatencyMean",
           "callbackLatencyMax",
-          "cumulativeDrift",
           "voiceOnsetError",
+          "transportEventRatio",
+          "transportEventCount",
+          "synthsRetained",
           "executionTime",
           "maxQueueDepth",
           "blocksExecuted",
@@ -174,11 +176,20 @@ describe("GitHub Action E2E", () => {
       // Approved for Frère Jacques: the audio-seam metrics flow through.
       expect(run0.callbackLatencyMean).toBeTypeOf("number");
       expect(run0.callbackLatencyMax).toBeTypeOf("number");
-      expect(run0.cumulativeDrift).toBeTypeOf("number");
       expect(run0.voiceOnsetError).toBeTypeOf("number");
+      // #7703's fingerprint: the mock schedules 8 transport events.
+      expect(run0.transportEventCount).toBeTypeOf("number");
+      // #7832's floor. Reads 0 because the mock has no synths to retain.
+      expect(run0.synthsRetained).toBeTypeOf("number");
+      // The ratio needs BOTH the transport count and the setTimeout fallback
+      // count. The mock has no fallback seam, so the ratio is genuinely
+      // uncomputable here and must read null ("no data") rather than a
+      // fabricated 0 or 1.
+      expect(run0.transportEventRatio).toBeNull();
       // Retired from the Frère Jacques contract: the driver now rejects these at
       // collection even though the scenario still produces them, so a capture
       // can never carry a cell the report will not compare.
+      expect(run0.cumulativeDrift).toBeUndefined();
       expect(run0.executionTime).toBeUndefined();
       expect(run0.blocksExecuted).toBeUndefined();
       expect(run0.maxQueueDepth).toBeUndefined();
@@ -283,6 +294,9 @@ describe("GitHub Action E2E", () => {
           "maxQueueDepth",
           "memoryDelta",
           "retainedHeap",
+          "canvasInkCoverage",
+          "canvasInkDrift",
+          "synthsRetained",
         ],
       };
       const configPath = path.join(workDir, "perfsense.config.json");
@@ -302,8 +316,19 @@ describe("GitHub Action E2E", () => {
       // All three phases ran on the page; musical-tree approved metrics flowed.
       expect(run0.executionTime).toBeTypeOf("number");
       expect(run0.maxQueueDepth).toBeTypeOf("number");
-      expect(run0.memoryDelta).toBeDefined();
-      expect(run0.retainedHeap).toBeDefined();
+      // #7848's ink fingerprints need a canvas that actually paints. The mock's
+      // stage object only exposes childrenCount/update and never draws, so both
+      // read null here. They are in the contract precisely so that this kind of
+      // "the cell produced nothing" state is visible instead of silently
+      // defaulting to 0; on the real musical-tree fixture they produce values.
+      expect(run0.canvasInkCoverage).toBeNull();
+      expect(run0.canvasInkDrift).toBeNull();
+      // #7832's floor, which this fixture can genuinely measure.
+      expect(run0.synthsRetained).toBeTypeOf("number");
+      // Retired from the musical-tree contract, so the driver rejects them at
+      // collection instead of carrying a cell nothing would compare.
+      expect(run0.memoryDelta).toBeUndefined();
+      expect(run0.retainedHeap).toBeUndefined();
       // Phase metrics not approved for musical-tree were rejected at collection.
       expect(run0.projectLoadTime).toBeUndefined();
       expect(run0.saveTime).toBeUndefined();

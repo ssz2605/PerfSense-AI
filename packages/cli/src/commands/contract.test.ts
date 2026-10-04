@@ -62,10 +62,10 @@ describe("buildContract", () => {
   it("counts expected/collected/valid/compared and surfaces baseline holes", () => {
     const contract = buildContract(makeResults(), makeBaseline());
     // Walks the matrix, so the count tracks the approved contract exactly:
-    // 3 bootstrap + 12 Rainbow + 6 Frère + 8 musical-tree + 2 spiral
-    // + 7 crabcanon = 39. buildContract walks BENCHMARK_MATRIX, so this is a
+    // 3 bootstrap + 5 Rainbow + 6 Frère + 5 musical-tree + 2 spiral
+    // + 5 crabcanon = 26. buildContract walks BENCHMARK_MATRIX, so this is a
     // live count of the contract, not a hardcoded page/metric total.
-    expect(contract.expected).toBe(39);
+    expect(contract.expected).toBe(26);
     expect(contract.collected).toBeGreaterThanOrEqual(3);
     expect(contract.valid).toBeGreaterThanOrEqual(3);
     expect(contract.missing).toBeGreaterThan(0);
