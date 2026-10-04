@@ -490,7 +490,12 @@ export async function run(argv: string[]): Promise<boolean> {
   // and reads null on all runs must be reported as CHANGED (not silently
   // omitted), and the run must fail (exit 1). "No data" must never be reported
   // as "no change" for a seam that exists to prove an optimization is wired.
-  const requiredFailures = findRequiredFailures(current);
+  //
+  // Scope comes from the baseline's own fixture list: a single-fixture
+  // investigation must not be told it is missing the other five fixtures. A
+  // fixture the baseline DOES contain is still enforced, so a capture that
+  // silently dropped a real fixture fails exactly as before.
+  const requiredFailures = findRequiredFailures(current, Object.keys(baseline.pages));
   if (requiredFailures.length > 0) {
     for (const rf of requiredFailures) {
       console.error(
