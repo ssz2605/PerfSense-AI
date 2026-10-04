@@ -67,6 +67,28 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
+ * The wall-clock budget for one page: its own `runTimeouts` entry, else the
+ * global `runTimeoutMs`, else the built-in default.
+ *
+ * The precedence is the whole point and is easy to get wrong by accident.
+ * musical-tree runs its program twelve times (twice inside playToCompletion,
+ * then `repeatRuns`), which measures ~289s of scenario work against a 300s
+ * global budget, so every run was being discarded as a timeout. Raising the
+ * global figure would hand that slack to every other page as well, where it
+ * could only mask a genuine hang.
+ *
+ * Exported for the same reason `openProjectGateSnippet` is: a rule that
+ * decides whether a run is measured at all should not be verifiable only by
+ * spending 20 minutes on a capture.
+ */
+export function resolveRunTimeout(
+  config: Pick<BenchmarkConfig, "runTimeoutMs" | "runTimeouts">,
+  pageName: string,
+): number {
+  return config.runTimeouts?.[pageName] ?? config.runTimeoutMs ?? RUN_TIMEOUT_MS;
+}
+
+/**
  * Readiness gate for the open-project phase, as a page-evaluated snippet.
  *
  * Exported for the same reason `openProjectSnippet` is: it is the only thing
@@ -164,7 +186,6 @@ export class BenchmarkDriver {
 
   async run(plugins: MetricPlugin[]): Promise<PageResult[]> {
     const { pages, runs, settleMs, port } = this.config;
-    const runTimeout = this.config.runTimeoutMs ?? RUN_TIMEOUT_MS;
     const results: PageResult[] = [];
 
     const pagesDir = process.cwd();
@@ -228,6 +249,16 @@ export class BenchmarkDriver {
           this.config.scenarios ? this.config.scenarios[pageName] : undefined,
           this.config.scenario,
         );
+
+        // A page may need more wall clock than the global budget allows; see
+        // `runTimeouts` on BenchmarkConfig.
+        const runTimeout = resolveRunTimeout(this.config, pageName);
+        const override = this.config.runTimeouts?.[pageName];
+        if (override !== undefined) {
+          console.log(
+            `    per-page run timeout ${override}ms (global ${this.config.runTimeoutMs ?? RUN_TIMEOUT_MS}ms)`,
+          );
+        }
 
         console.log(
           `\nBenchmarking ${pageName} (${runs} runs)${pagePhases.length > 0 ? `, phases: ${pagePhases.join(" → ")}` : ""} ...`,

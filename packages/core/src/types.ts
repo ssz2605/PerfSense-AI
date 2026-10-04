@@ -37,6 +37,19 @@ export interface BenchmarkConfig {
   /** Per-run wall-clock budget in ms (default 120000). */
   runTimeoutMs?: number;
   /**
+   * Per-run wall-clock budget in ms for one page, overriding `runTimeoutMs`.
+   * Keyed by page name, the same way `fixtures` and `scenarios` are.
+   *
+   * This exists because the budget has two independent consumers -- the
+   * scenario phase and the whole-run race -- and the pages need very different
+   * amounts of it. musical-tree runs its program twelve times (twice inside
+   * playToCompletion, then `repeatRuns`), which measures 289s of scenario work
+   * against a 300s global budget; every run was being skipped as a timeout. A
+   * global raise would give that slack to pages that do not need it and hide
+   * genuine hangs on the fast ones.
+   */
+  runTimeouts?: Record<string, number>;
+  /**
    * Scroll-key steps the `interact` scenario issues to pan the workspace
    * (default 24). Each step moves the blocks container by half a canvas
    * height, so the workspace is traversed end to end.

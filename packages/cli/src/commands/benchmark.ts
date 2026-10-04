@@ -15,6 +15,8 @@ interface ConfigFile {
   fixtures?: Record<string, string>;
   thresholds?: Record<string, { warning: number; fail: number }>;
   runTimeoutMs?: number;
+  /** Per-page override of runTimeoutMs, keyed by page name. */
+  runTimeouts?: Record<string, number>;
   port?: number;
 }
 
@@ -34,6 +36,7 @@ interface Args {
   scenarios?: Record<string, string[]>;
   fixtures?: Record<string, string>;
   runTimeoutMs?: number;
+  runTimeouts?: Record<string, number>;
   port?: number;
 }
 
@@ -46,6 +49,7 @@ function parseArgs(argv: string[]): Args {
   let scenario: string | undefined;
   let scenarios: Record<string, string[]> | undefined;
   let runTimeoutMs: number | undefined;
+  let runTimeouts: Record<string, number> | undefined;
   let port: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
@@ -83,6 +87,7 @@ function parseArgs(argv: string[]): Args {
         if (config.scenarios) scenarios = config.scenarios;
         if (config.runTimeoutMs !== undefined)
           runTimeoutMs = config.runTimeoutMs;
+        if (config.runTimeouts) runTimeouts = config.runTimeouts;
         if (config.port !== undefined) port = config.port;
         if (config.fixtures) {
           for (const [pageName, rel] of Object.entries(config.fixtures)) {
@@ -117,6 +122,7 @@ function parseArgs(argv: string[]): Args {
     scenarios,
     fixtures,
     runTimeoutMs,
+    runTimeouts,
     port,
   };
 }
@@ -146,6 +152,7 @@ export async function run(argv: string[]): Promise<void> {
         ? args.fixtures
         : undefined,
     runTimeoutMs: args.runTimeoutMs,
+    runTimeouts: args.runTimeouts,
   });
 
   const plugins: MetricPlugin[] = args.metrics.map((name) => {

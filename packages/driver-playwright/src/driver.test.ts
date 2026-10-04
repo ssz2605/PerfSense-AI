@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { openProjectGateSnippet, withOpenProjectGuard } from './driver';
+import {
+  openProjectGateSnippet,
+  withOpenProjectGuard,
+  resolveRunTimeout,
+} from './driver';
 
 /**
  * Two harness defects made the benchmark report numbers that described a page
@@ -118,5 +122,42 @@ describe('withOpenProjectGuard', () => {
     );
     expect(ran).toBe(true);
     expect(warnings).toEqual([]);
+  });
+});
+
+describe('resolveRunTimeout', () => {
+  it('prefers the page-specific budget over the global one', () => {
+    // The reason `runTimeouts` exists at all: musical-tree measures ~289s of
+    // scenario work against a 300s global budget, so its runs were being
+    // discarded as timeouts rather than measured.
+    expect(
+      resolveRunTimeout(
+        { runTimeoutMs: 300000, runTimeouts: { 'musical-tree.html': 420000 } },
+        'musical-tree.html',
+      ),
+    ).toBe(420000);
+  });
+
+  it('leaves the global budget in charge for every page it does not name', () => {
+    // A per-page raise must not become a raise for everything: that would hand
+    // the slack to the fast fixtures, where it could only mask a real hang.
+    const config = {
+      runTimeoutMs: 300000,
+      runTimeouts: { 'musical-tree.html': 420000 },
+    };
+    expect(resolveRunTimeout(config, 'Frere-Jacques.html')).toBe(300000);
+    expect(resolveRunTimeout(config, 'index.html')).toBe(300000);
+  });
+
+  it('falls back to the built-in default when neither is set', () => {
+    expect(resolveRunTimeout({}, 'index.html')).toBe(120000);
+  });
+
+  it('honours a per-page budget even with no global one', () => {
+    // The override must not depend on runTimeoutMs being present, or a config
+    // that only sets runTimeouts would silently time every page out at 120s.
+    expect(
+      resolveRunTimeout({ runTimeouts: { 'musical-tree.html': 420000 } }, 'musical-tree.html'),
+    ).toBe(420000);
   });
 });
