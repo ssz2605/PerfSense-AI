@@ -322,12 +322,12 @@ describe("GitHub Action E2E", () => {
     }
   }, 120000);
 
-  it("collects scheduleLagMean/Max for the crabcanon fixture", () => {
+  it("collects no render cell for the crabcanon fixture on a mock page", () => {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "perfsense-lag-"));
     try {
       const pagesDir = path.join(workDir, "pages");
       fs.cpSync(path.join(examplesDir, "pages"), pagesDir, { recursive: true });
-      // scheduleLagMean/scheduleLagMax are approved only for crabcanon-plot.
+      // The crabcanon cells are approved only for crabcanon-plot.
       fs.copyFileSync(
         path.join(pagesDir, "fast-project.html"),
         path.join(pagesDir, "crabcanon-plot.html"),
@@ -338,7 +338,14 @@ describe("GitHub Action E2E", () => {
         runs: 2,
         port: 8938,
         scenario: "playToCompletion",
-        metrics: ["scheduleLagMean", "scheduleLagMax", "callbackLatencyMean"],
+        metrics: [
+          "stageUpdateTime",
+          "stageUpdateMax",
+          "cacheRebuildCount",
+          "viewportCulledBlocks",
+          "transportEventRatio",
+          "callbackLatencyMean",
+        ],
       };
       const configPath = path.join(workDir, "perfsense.config.json");
       fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
@@ -352,8 +359,35 @@ describe("GitHub Action E2E", () => {
         fs.readFileSync(path.join(workDir, "results.json"), "utf-8"),
       );
       const run0 = results[0].runs[0].metrics;
-      expect(run0.scheduleLagMean).toBeTypeOf("number");
-      expect(run0.scheduleLagMax).toBeTypeOf("number");
+
+      // The crabcanon contract is now entirely render-scoped, and none of those
+      // cells can be produced by a static mock fixture:
+      //   stageUpdateTime/Max  read only the frames inside the interact
+      //                        scenario's pan window, which playToCompletion
+      //                        never opens, so inWindow is empty.
+      //   cacheRebuildCount    counts Block.updateCache() calls from
+      //                        highlight/unhighlight, which only the interact
+      //                        sweep issues.
+      //   viewportCulledBlocks is written by the interact scenario's sweep.
+      //   transportEventRatio  needs logo._timerManager.setGuardedTimeout as
+      //                        its denominator; the mock has no _timerManager.
+      // Asserting they stay absent here is what stops a future wiring change
+      // from silently reporting a mock number as if it were a real reading. The
+      // real values come from the app served with ?mbPerf=1 (see
+      // musicblocks/perfsense.config.json), where the interact scenario runs.
+      for (const metric of [
+        "stageUpdateTime",
+        "stageUpdateMax",
+        "cacheRebuildCount",
+        "viewportCulledBlocks",
+        "transportEventRatio",
+      ]) {
+        // Raw results carry an explicit null; baseline save drops it. Either is
+        // "not measured" -- what must never happen is a number appearing here.
+        expect(typeof run0[metric], `${metric} must not be faked on a mock fixture`).not.toBe(
+          "number",
+        );
+      }
       // Not approved for crabcanon: rejected at the driver.
       expect(run0.callbackLatencyMean).toBeUndefined();
     } finally {

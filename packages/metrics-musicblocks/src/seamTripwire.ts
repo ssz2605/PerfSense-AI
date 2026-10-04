@@ -32,21 +32,45 @@ export interface TransportSeamCheck {
   reason?: string;
 }
 
+export interface TransportSeamOptions {
+  /**
+   * transportEventRatio on the baseline this run is being compared against.
+   * When present the check is relative: the seam must not collapse to a fraction
+   * of its recorded share. When absent (first capture, or the baseline predates
+   * this cell) the check falls back to TRANSPORT_SEAM_ABSOLUTE_FLOOR.
+   */
+  baselineRatio?: number | null;
+}
+
 /**
- * The ratio below which the transport seam is considered dead. Locally the
- * honest value on Frère Jacques is ~0.025 (268 transport.schedule calls vs
- * 10330 setTimeout fallback delays), because the app schedules note *delays*
- * through Tone.Transport only opportunistically — Tone.Transport is never
- * started (transportState stays "stopped") even though Tone.context.state is
- * "running". So this is a floor well under 1, not a near-1.0 threshold: it
- * fires only when the transport path is entirely absent, which is the
- * regression this tripwire exists to catch. A ratio at or above this value
- * means transport.schedule did fire.
+ * How much of its baseline share the transport seam may keep before the check
+ * calls it dead.
+ *
+ * The seam's healthy value is not near 1.0, so an absolute threshold is the
+ * wrong shape: the app schedules note *delays* through Tone.Transport only
+ * opportunistically (logo.js:1818-1856 requires turtleDelay === 0 && delay > 0
+ * && transport.isAvailable && transport.isClockRunning), and Tone.Transport is
+ * never started — transportState stays "stopped" even while Tone.context.state
+ * is "running". Measured split on Frère Jacques is ~0.025 (268
+ * transport.schedule calls vs 10330 setTimeout fallback delays). A regression is
+ * therefore not "the ratio fell below some absolute number", it is "the ratio
+ * fell relative to what this app actually does". Half the baseline share is
+ * well clear of run-to-run noise yet far below the point where the transport
+ * path has stopped carrying any of the scheduling.
  */
-export const TRANSPORT_SEAM_MIN_RATIO = 0.001;
+export const TRANSPORT_SEAM_MIN_SHARE_OF_BASELINE = 0.5;
+
+/**
+ * Floor used only when there is no baseline share to compare against. It sits
+ * far under the healthy ~0.025 so it fires solely when transport.schedule has
+ * stopped contributing at all, which is the regression this tripwire exists to
+ * catch.
+ */
+export const TRANSPORT_SEAM_ABSOLUTE_FLOOR = 0.001;
 
 export function checkTransportSeamAlive(
   metrics: Record<string, number | null>,
+  options: TransportSeamOptions = {},
 ): TransportSeamCheck {
   const ratio =
     typeof metrics.transportEventRatio === "number" ? metrics.transportEventRatio : null;
@@ -54,17 +78,30 @@ export function checkTransportSeamAlive(
     (m) => typeof metrics[m] === "number",
   ).length;
 
-  // The collector reported a share, and the transport path is still in use.
-  if (ratio !== null && ratio >= TRANSPORT_SEAM_MIN_RATIO) {
+  const baselineRatio =
+    typeof options.baselineRatio === "number" && options.baselineRatio > 0
+      ? options.baselineRatio
+      : null;
+  const floor = baselineRatio !== null ? baselineRatio * TRANSPORT_SEAM_MIN_SHARE_OF_BASELINE : TRANSPORT_SEAM_ABSOLUTE_FLOOR;
+  const floorSource =
+    baselineRatio !== null
+      ? `${TRANSPORT_SEAM_MIN_SHARE_OF_BASELINE} of the baseline share ${baselineRatio}`
+      : `the absolute floor ${TRANSPORT_SEAM_ABSOLUTE_FLOOR} (no baseline share on record)`;
+
+  // The collector reported a share, and the transport path is still carrying
+  // enough of the scheduling.
+  if (ratio !== null && ratio >= floor) {
     return { alive: true, transportEventRatio: ratio };
   }
-  // The collector reported a share but the transport path is gone.
+  // The collector reported a share but the transport path has collapsed.
   if (ratio !== null) {
     return {
       alive: false,
       transportEventRatio: ratio,
       reason:
-        `transportEventRatio ${ratio} is below ${TRANSPORT_SEAM_MIN_RATIO}: note scheduling is going through the setTimeout fallback (logo.js:1841-1856) instead of Tone.Transport, so the #7703 seam has regressed`,
+        `transportEventRatio ${ratio} is below ${floorSource}: note scheduling is going ` +
+        'through the setTimeout fallback (logo.js:1841-1856) instead of Tone.Transport, ' +
+        'so the #7703 seam has regressed',
     };
   }
   // No ratio collected at all. Audio observations alone are weaker evidence
@@ -76,7 +113,8 @@ export function checkTransportSeamAlive(
     alive: false,
     transportEventRatio: null,
     reason:
-      "no transport data observed (transportEventRatio is null or 0 and all audio metrics are null); the Tone.Transport seam may be dead, e.g. playback scheduling reverted to setTimeout",
+      "no transport data observed (transportEventRatio is null and all audio metrics are null); " +
+      'the Tone.Transport seam may be dead, e.g. playback scheduling reverted to setTimeout',
   };
 }
 

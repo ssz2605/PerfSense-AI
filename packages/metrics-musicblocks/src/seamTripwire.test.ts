@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   checkTransportSeamAlive,
   FRERE_JACQUES_TRANSPORT_METRICS,
-  TRANSPORT_SEAM_MIN_RATIO,
+  TRANSPORT_SEAM_ABSOLUTE_FLOOR,
+  TRANSPORT_SEAM_MIN_SHARE_OF_BASELINE,
   analyzeAudioClock,
   SYNTHETIC_DRIFT_THRESHOLD_MS,
 } from "./seamTripwire";
@@ -74,10 +75,74 @@ describe("checkTransportSeamAlive", () => {
     expect(check.reason).toContain("setTimeout fallback");
   });
 
-  it("uses the documented floor boundary", () => {
-    expect(TRANSPORT_SEAM_MIN_RATIO).toBe(0.001);
+  it("falls back to the absolute floor when there is no baseline share", () => {
+    // The absolute floor only applies when nothing is on record to compare
+    // against, so it can sit far under the healthy ~0.025.
+    expect(TRANSPORT_SEAM_ABSOLUTE_FLOOR).toBe(0.001);
     expect(checkTransportSeamAlive({ transportEventRatio: 0.001 }).alive).toBe(true);
     expect(checkTransportSeamAlive({ transportEventRatio: 0.0009 }).alive).toBe(false);
+    // A baseline of 0 carries no information, so it must not become a 0 floor.
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.0009 }, { baselineRatio: 0 }).alive,
+    ).toBe(false);
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.0009 }, { baselineRatio: null }).alive,
+    ).toBe(false);
+  });
+
+  it("gates on half the baseline share, not on an absolute 1.0", () => {
+    // The seam's honest value is ~0.025 because Tone.Transport is never started.
+    // A check that demanded 1.0 would fire on a correct run; demanding half the
+    // baseline share asks the question that actually matters -- has the
+    // transport path stopped carrying scheduling?
+    const baselineRatio = 0.025;
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.025 }, { baselineRatio }).alive,
+    ).toBe(true);
+    // Exactly half the baseline is still alive (the boundary is inclusive).
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.0125 }, { baselineRatio }).alive,
+    ).toBe(true);
+    // Below half: dead, and the reason quotes the baseline it regressed against.
+    const collapsed = checkTransportSeamAlive(
+      { transportEventRatio: 0.0124 },
+      { baselineRatio },
+    );
+    expect(collapsed.alive).toBe(false);
+    expect(collapsed.reason).toContain("0.025");
+    expect(collapsed.reason).toContain("0.5 of the baseline share");
+    expect(collapsed.reason).toContain("setTimeout fallback");
+  });
+
+  it("catches a ratio that the absolute floor alone would have passed", () => {
+    // 0.004 is 16% of the baseline share: 4x above the 0.001 absolute floor, so
+    // the old fixed threshold called this healthy while the seam was in fact
+    // three quarters gone.
+    expect(checkTransportSeamAlive({ transportEventRatio: 0.004 }).alive).toBe(true);
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.004 }, { baselineRatio: 0.025 }).alive,
+    ).toBe(false);
+  });
+
+  it("scales the floor with the baseline rather than hardcoding the healthy value", () => {
+    // A different app (or a different runner) with a much larger transport share
+    // must be held to a correspondingly larger floor.
+    expect(TRANSPORT_SEAM_MIN_SHARE_OF_BASELINE).toBe(0.5);
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.3 }, { baselineRatio: 0.5 }).alive,
+    ).toBe(true);
+    expect(
+      checkTransportSeamAlive({ transportEventRatio: 0.3 }, { baselineRatio: 0.9 }).alive,
+    ).toBe(false);
+  });
+
+  it("still reports no-data as dead regardless of the baseline share", () => {
+    const check = checkTransportSeamAlive(
+      { transportEventRatio: null },
+      { baselineRatio: 0.025 },
+    );
+    expect(check.alive).toBe(false);
+    expect(check.reason).toContain("no transport data observed");
   });
 
   it("covers exactly the four Frère Jacques audio metrics", () => {

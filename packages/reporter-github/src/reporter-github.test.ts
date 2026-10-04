@@ -77,6 +77,9 @@ describe('matrix filtering', () => {
         // Recursion depth belongs to the three fixtures that own it explicitly.
         makeEntry({ page: 'Frere-Jacques.html', metric: 'maxLogicalDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
         makeEntry({ page: 'Frere-Jacques.html', metric: 'maxActionDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
+        // viewportCulledBlocks replaced the retired scheduleLag probes here.
+        makeEntry({ page: 'crabcanon-plot.html', metric: 'viewportCulledBlocks', status: 'PASS', deltaPercent: -2, baselineMedian: 796, currentMedian: 780 }),
+        // Retired from the crabcanon contract as constant-on-unchanged-code.
         makeEntry({ page: 'crabcanon-plot.html', metric: 'scheduleLagMean', status: 'PASS', deltaPercent: -2, baselineMedian: 12, currentMedian: 11.8 }),
         // Extra raw metric that is not part of the crabcanon matrix.
         makeEntry({ page: 'crabcanon-plot.html', metric: 'retainedHeap', status: 'REGRESSION', deltaPercent: 50, baselineMedian: 1000, currentMedian: 1500 }),
@@ -86,11 +89,14 @@ describe('matrix filtering', () => {
     const comment = generatePRComment(result, PR_27);
 
     expect(comment).toContain('callbackLatencyMean');
-    expect(comment).toContain('scheduleLagMean');
+    expect(comment).toContain('viewportCulledBlocks');
     expect(comment).not.toContain('projectLoadTime');
     expect(comment).not.toContain('maxLogicalDepth');
     expect(comment).not.toContain('maxActionDepth');
     expect(comment).not.toContain('retainedHeap');
+    // scheduleLagMean is no longer approved for crabcanon, so it must not
+    // surface even though the run collected it.
+    expect(comment).not.toContain('scheduleLagMean');
     // executionTime is only approved for musical-tree and the spiral, never for
     // Frère, so it must not surface here even though the run collected it.
     expect(comment).not.toContain('executionTime');

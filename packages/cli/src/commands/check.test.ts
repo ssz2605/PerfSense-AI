@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { clampStatus, findDeadSeamPages } from './check';
-import type { PageResult } from '@perfsense/core';
+import type { BaselineData, PageResult } from '@perfsense/core';
 
 describe('clampStatus (maxStatus ceiling)', () => {
   it('caps REGRESSION at WARNING for warn-only metrics', () => {
@@ -24,6 +24,34 @@ describe('clampStatus (maxStatus ceiling)', () => {
 
 function pageResult(page: string, metrics: Record<string, number | null>): PageResult {
   return { page, runs: [{ run: 1, metrics }] };
+}
+
+/** Minimal baseline carrying a single median cell, which is all the seam reads. */
+function baselineWithRatio(page: string, median: number): BaselineData {
+  return {
+    schema: 'perfsense-baseline-v2',
+    schemaVersion: 2,
+    createdAt: '2026-09-20T00:00:00.000Z',
+    generatedAt: '2026-09-20T00:00:00.000Z',
+    runs: 5,
+    pages: {
+      [page]: {
+        transportEventRatio: { median } as BaselineData['pages'][string]['transportEventRatio'],
+      },
+    },
+    source: 'test',
+    commitSHA: 'abc123',
+    harness: { ref: 'deadbee', source: 'PERFSENSE_REF' },
+    env: {
+      os: 'linux 6.8.0',
+      arch: 'x64',
+      node: 'v20.11.0',
+      cpu: 'Xeon',
+      cores: 4,
+      memoryGB: 16,
+      coldState: true,
+    },
+  };
 }
 
 describe('findDeadSeamPages (Layer A tripwire)', () => {
@@ -96,6 +124,46 @@ describe('findDeadSeamPages (Layer A tripwire)', () => {
       } as PageResult['runs'][number]['metrics']),
     ];
     expect(findDeadSeamPages(current, isAudioApproved)).toHaveLength(0);
+  });
+
+  it('holds the seam to half the baseline share, not an absolute 1.0', () => {
+    // The observed Frere-Jacques share is ~0.025 because Tone.Transport is never
+    // started, so an absolute 1.0 requirement would fire on a correct run. A
+    // quarter of the baseline share is four times the old 0.001 absolute floor
+    // and still a real collapse, so only a baseline-relative floor catches it.
+    const baseline = baselineWithRatio('Frere-Jacques.html', 0.025);
+    const quarter = pageResult('Frere-Jacques.html', {
+      transportEventRatio: 0.006,
+      callbackLatencyMean: 12.4,
+      cumulativeDrift: 0.5,
+    });
+    // Without the baseline the absolute floor lets this through.
+    expect(findDeadSeamPages([quarter], isAudioApproved)).toHaveLength(0);
+    const findings = findDeadSeamPages([quarter], isAudioApproved, baseline);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].check.alive).toBe(false);
+    expect(findings[0].check.reason).toContain('0.5 of the baseline share');
+  });
+
+  it('passes a healthy ratio against the baseline it was measured from', () => {
+    const baseline = baselineWithRatio('Frere-Jacques.html', 0.025);
+    const current = [
+      pageResult('Frere-Jacques.html', {
+        transportEventRatio: 0.024,
+        callbackLatencyMean: 12.4,
+      }),
+    ];
+    expect(findDeadSeamPages(current, isAudioApproved, baseline)).toHaveLength(0);
+  });
+
+  it('does not read a baseline cell from a different page', () => {
+    // A baseline recorded against another fixture must not become this page's
+    // floor; the check falls back to the absolute floor instead.
+    const baseline = baselineWithRatio('musical-tree.html', 0.9);
+    const current = [
+      pageResult('Frere-Jacques.html', { transportEventRatio: 0.004 }),
+    ];
+    expect(findDeadSeamPages(current, isAudioApproved, baseline)).toHaveLength(0);
   });
 
   it('ignores pages whose fixture approves no audio metric', () => {

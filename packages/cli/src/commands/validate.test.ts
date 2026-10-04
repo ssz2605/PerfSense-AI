@@ -66,26 +66,54 @@ function healthyPages(): BaselineData['pages'] {
       saveTime: stats([150, 151, 152, 153, 154]),
       exportMIDITime: stats([1700, 1710, 1720, 1730, 1740]),
       saveAsLilypondTime: stats([1500, 1510, 1520, 1530, 1540]),
+      // stageUpdateCallCount counts stage.update() frames since openStart; the
+      // value here reflects _suppressRefresh keeping the loop idle during decode.
+      stageUpdateCallCount: stats([1140, 1150, 1145, 1155, 1148]),
+      peakHeapDuringExport: stats([27.0e6, 27.1e6, 27.2e6, 27.3e6, 27.4e6]),
+      maxDepth: stats([100, 100, 100, 100, 100]),
+      // A floor, not a cost: healthy is 0 after _cleanupAfterCompletion().
+      logoSoundsRetained: stats([0, 0, 0, 0, 0]),
+      stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
+      stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
+      cacheRebuildCount: stats([242, 245, 244, 243, 246]),
+      viewportCulledBlocks: stats([794, 796, 797, 795, 796]),
     },
     'Frere-Jacques.html': {
       callbackLatencyMean: stats([0.5, 0.501, 0.502, 0.503, 0.504]),
       callbackLatencyMax: stats([1.2, 1.21, 1.22, 1.23, 1.24]),
       cumulativeDrift: stats([1.5e-9, 1.51e-9, 1.52e-9, 1.53e-9, 1.54e-9]),
       voiceOnsetError: stats([0.48, 0.481, 0.482, 0.483, 0.49]),
+      // 268 transport.schedule calls vs 10330 setTimeout fallback delays.
+      transportEventRatio: stats([0.0251, 0.0254, 0.0253, 0.0252, 0.0255]),
+      // A floor: healthy is 0 (synths stopped after completion).
+      synthsRetained: stats([0, 0, 0, 0, 0]),
     },
     'musical-tree.html': {
       maxQueueDepth: stats([22, 22, 22, 22, 22]),
       executionTime: stats([41000, 41100, 41200, 41300, 41400]),
       memoryDelta: stats([0, 0, 0, 0, 0]),
       retainedHeap: stats([0, 0, 0, 0, 0]),
+      // #7848 invariants: a natural completion preserves the drawing, and N
+      // completions accumulate neither ink nor heap. Values are deliberately
+      // tight because this fixture must read as a *clean* capture; the real
+      // spreads are still to be characterized over 5 runs.
+      canvasInkCoverage: stats([0.421, 0.419, 0.423, 0.42, 0.422]),
+      canvasInkDrift: stats([0.00114, 0.001155, 0.00115, 0.00116, 0.0011525]),
+      retainedHeapSlope: stats([11980, 12100, 12030, 12150, 12080]),
+      synthsRetained: stats([0, 0, 0, 0, 0]),
     },
     'ascending-notes-color-spiral.html': {
       executionTime: stats([2000, 2010, 2020, 2030, 2040]),
       blocksExecuted: stats([178, 178, 178, 178, 178]),
     },
     'crabcanon-plot.html': {
-      scheduleLagMean: stats([5.8e-12, 5.9e-12, 6e-12, 6.1e-12, 6.2e-12]),
-      scheduleLagMax: stats([2.1e-11, 2.2e-11, 2.3e-11, 2.4e-11, 2.5e-11]),
+      // The render cells that replaced the retired scheduleLag probes
+      // (~1e-11 ms, below timer resolution, hence constant on unchanged code).
+      stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
+      stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
+      cacheRebuildCount: stats([242, 245, 244, 243, 246]),
+      viewportCulledBlocks: stats([794, 796, 797, 795, 796]),
+      transportEventRatio: stats([0.0251, 0.0254, 0.0253, 0.0252, 0.0255]),
     },
   };
 }
@@ -106,6 +134,9 @@ function pagesWithRetiredCells(): ReturnType<typeof healthyPages> {
   pages['crabcanon-plot.html'].executionTime = stats([24000, 24100, 24200, 24300, 24400]);
   pages['crabcanon-plot.html'].blocksExecuted = stats([2078, 2078, 2078, 2078, 2078]);
   pages['crabcanon-plot.html'].maxQueueDepth = stats([10, 10, 10, 10, 10]);
+  // The below-resolution lag probes retired from the crabcanon contract.
+  pages['crabcanon-plot.html'].scheduleLagMean = stats([5.8e-12, 5.9e-12, 6e-12, 6.1e-12, 6.2e-12]);
+  pages['crabcanon-plot.html'].scheduleLagMax = stats([2.1e-11, 2.2e-11, 2.3e-11, 2.4e-11, 2.5e-11]);
   return pages as ReturnType<typeof healthyPages>;
 }
 
@@ -205,14 +236,20 @@ describe('validateBaseline', () => {
   });
 
   it('does not demand a tight distribution from a probe below timer resolution', () => {
+    // cumulativeDrift is the cell that is genuinely below the resolution floor
+    // in the approved contract: a sub-nanosecond drift cannot be measured by a
+    // millisecond timer, so its p10->p90 span is meaningless as noise. The
+    // scheduleLag probes used to cover this case but left the crabcanon
+    // contract, because on unchanged code they are constant -- below resolution
+    // AND zero variance, which says nothing about a capture either way.
     const pages = healthyPages();
-    pages['crabcanon-plot.html'].scheduleLagMax = stats([1e-12, 9e-12, 3e-11, 7e-11, 2.1e-10]);
+    pages['Frere-Jacques.html'].cumulativeDrift = stats([1e-12, 9e-12, 3e-11, 7e-11, 2.1e-10]);
     const result = validateBaseline(baseline(pages), {
-      validity: { maxSpreadPct: { scheduleLagMax: 1 } },
+      validity: { maxSpreadPct: { cumulativeDrift: 1 } },
     });
-    expect(findDefect(result, 'scheduleLagMax', 'below-resolution')?.severity).toBe('warn');
-    expect(findDefect(result, 'scheduleLagMax', 'spread')).toBeUndefined();
-    expect(findDefect(result, 'scheduleLagMax', 'bimodal')).toBeUndefined();
+    expect(findDefect(result, 'cumulativeDrift', 'below-resolution')?.severity).toBe('warn');
+    expect(findDefect(result, 'cumulativeDrift', 'spread')).toBeUndefined();
+    expect(findDefect(result, 'cumulativeDrift', 'bimodal')).toBeUndefined();
     expect(result.ok).toBe(true);
   });
 
@@ -247,8 +284,16 @@ describe('validateBaseline', () => {
     // that must be visible rather than counted as coverage.
     const result = validateBaseline(baseline(pagesWithRetiredCells()));
     const orphans = result.defects.filter((d) => d.kind === 'orphan-cell');
-    expect(orphans.length).toBe(9);
-    for (const metric of ['scheduleCount', 'blocksExecuted', 'maxLogicalDepth']) {
+    // Nine retired cells, plus the two crabcanon lag probes that left the
+    // contract as constant-on-unchanged-code (below timer resolution).
+    expect(orphans.length).toBe(11);
+    for (const metric of [
+      'scheduleCount',
+      'blocksExecuted',
+      'maxLogicalDepth',
+      'scheduleLagMean',
+      'scheduleLagMax',
+    ]) {
       expect(orphans.some((d) => d.metric === metric)).toBe(true);
     }
     // Reported, never blocking.
@@ -393,13 +438,20 @@ describe('validateBaseline', () => {
       },
     });
     expect(result.ok).toBe(true);
-    // Nothing left but the probes that genuinely cannot measure anything.
-    expect(result.defects.map((d) => d.kind).sort()).toEqual([
-      'below-resolution',
-      'below-resolution',
-      'below-resolution',
-      'zero-variance',
-      'zero-variance',
+    // Nothing left but the probes that genuinely cannot measure anything. The
+    // five zero-variance cells are all floor metrics, where a healthy value of 0
+    // is the *point*: memoryDelta, retainedHeap, logoSoundsRetained and the two
+    // synthsRetained cells. The one below-resolution cell is cumulativeDrift.
+    // The crabcanon scheduleLag probes used to be the other two; they left the
+    // contract because on unchanged code they are constant, which is zero
+    // variance rather than a below-resolution reading.
+    expect(result.defects.map((d) => `${d.metric}:${d.kind}`).sort()).toEqual([
+      'cumulativeDrift:below-resolution',
+      'logoSoundsRetained:zero-variance',
+      'memoryDelta:zero-variance',
+      'retainedHeap:zero-variance',
+      'synthsRetained:zero-variance',
+      'synthsRetained:zero-variance',
     ]);
   });
 

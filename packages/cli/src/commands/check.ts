@@ -137,6 +137,7 @@ export interface DeadSeamFinding {
 export function findDeadSeamPages(
   current: PageResult[],
   isAudioApproved: (page: string) => boolean,
+  baseline?: BaselineData | null,
 ): DeadSeamFinding[] {
   const findings: DeadSeamFinding[] = [];
   for (const pageResult of current) {
@@ -157,7 +158,16 @@ export function findDeadSeamPages(
         if (typeof m[key] === 'number') audio[key] = m[key] as number;
       }
     }
-    const check = checkTransportSeamAlive({ ...audio, transportEventRatio });
+    // The seam's healthy share is ~0.025, not ~1, so the check is relative: the
+    // floor is half of whatever this app's baseline recorded. With no baseline
+    // cell (first capture, or a baseline predating the metric) the check falls
+    // back to an absolute floor well under the healthy value.
+    const baselinePage = baseline?.pages?.[pageResult.page];
+    const baselineRatio = baselinePage?.transportEventRatio?.median ?? null;
+    const check = checkTransportSeamAlive(
+      { ...audio, transportEventRatio },
+      { baselineRatio },
+    );
     if (!check.alive) {
       findings.push({ page: pageResult.page, check });
     }
@@ -390,8 +400,10 @@ export async function run(argv: string[]): Promise<void> {
   // Layer A seam tripwire (hard precondition, no statistical change): a dead
   // Tone.Transport seam on an approved audio page silently nulls every audio
   // metric — fail loudly rather than report "no data" as a valid run.
-  const deadSeams = findDeadSeamPages(current, (page) =>
-    FRERE_JACQUES_TRANSPORT_METRICS.some((m) => isMetricApproved(page, m)),
+  const deadSeams = findDeadSeamPages(
+    current,
+    (page) => FRERE_JACQUES_TRANSPORT_METRICS.some((m) => isMetricApproved(page, m)),
+    baseline ?? null,
   );
   if (deadSeams.length > 0) {
     for (const finding of deadSeams) {

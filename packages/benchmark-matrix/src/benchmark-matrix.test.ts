@@ -28,16 +28,51 @@ describe('Benchmark Matrix contract', () => {
 
   it('defines the approved metric sets per fixture', () => {
     expect(getApprovedMetrics('index.html')).toEqual(['bootstrapTotal', 'initTotal', 'heapAfterBoot']);
-    expect(getApprovedMetrics('RainbowConnection.html')).toEqual(['projectLoadTime', 'saveTime', 'exportMIDITime', 'saveAsLilypondTime']);
+    expect(getApprovedMetrics('RainbowConnection.html')).toEqual([
+      'projectLoadTime',
+      'saveTime',
+      'exportMIDITime',
+      'saveAsLilypondTime',
+      'stageUpdateCallCount',
+      'peakHeapDuringExport',
+      'maxDepth',
+      'logoSoundsRetained',
+      'stageUpdateTime',
+      'stageUpdateMax',
+      'cacheRebuildCount',
+      'viewportCulledBlocks',
+    ]);
+    // transportEventRatio and synthsRetained are the two audio-family cells that
+    // survive a synthesised clock, because both are counts rather than timings.
     expect(getApprovedMetrics('Frere-Jacques.html')).toEqual([
       'callbackLatencyMean',
       'callbackLatencyMax',
       'cumulativeDrift',
       'voiceOnsetError',
+      'transportEventRatio',
+      'synthsRetained',
     ]);
-    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap']);
+    // The repeatedRun cells are PR #7848's invariants.
+    expect(getApprovedMetrics('musical-tree.html')).toEqual([
+      'maxQueueDepth',
+      'executionTime',
+      'memoryDelta',
+      'retainedHeap',
+      'canvasInkCoverage',
+      'canvasInkDrift',
+      'retainedHeapSlope',
+      'synthsRetained',
+    ]);
     expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'blocksExecuted']);
-    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
+    // scheduleLagMean/scheduleLagMax were removed: at ~1e-11 ms they are
+    // constant on unchanged code. The render cells replaced them (#7738/#7815).
+    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual([
+      'stageUpdateTime',
+      'stageUpdateMax',
+      'cacheRebuildCount',
+      'viewportCulledBlocks',
+      'transportEventRatio',
+    ]);
   });
 
   it('keeps the retired interpreter/recursion counters out of the contract', () => {
@@ -53,6 +88,10 @@ describe('Benchmark Matrix contract', () => {
     expect(isMetricApproved('Frere-Jacques.html', 'scheduleCount')).toBe(false);
     expect(isMetricApproved('musical-tree.html', 'maxLogicalDepth')).toBe(false);
     expect(isMetricApproved('ascending-notes-color-spiral.html', 'maxLogicalDepth')).toBe(false);
+    // scheduleLagMean/scheduleLagMax left the crabcanon contract (below
+    // resolution), so they are no longer approved there either.
+    expect(isMetricApproved('crabcanon-plot.html', 'scheduleLagMean')).toBe(false);
+    expect(isMetricApproved('crabcanon-plot.html', 'scheduleLagMax')).toBe(false);
   });
 
   it('rejects metrics that are not part of the matrix for a fixture', () => {
@@ -121,11 +160,17 @@ describe('Benchmark Matrix contract', () => {
     // Verified metrics are not warn-only, and neither is scheduleLag.
     expect(isMetricWarnOnly('index.html', 'bootstrapTotal')).toBe(false);
     expect(isMetricWarnOnly('RainbowConnection.html', 'projectLoadTime')).toBe(false);
-    // The crabcanon lag probes sit at ~1e-11 ms, below timer resolution, so they
-    // may inform but never fail a PR on their own. Its interpreter metrics are
-    // the ones with real values.
-    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMean')).toBe(true);
-    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMax')).toBe(true);
+    // The crabcanon lag probes were removed from the contract entirely (below
+    // timer resolution), so they are neither approved nor warn-only now. Not
+    // approved for a fixture means not warn-only for it, same as any other
+    // unlisted metric. Its render cells are warn-only while their CI spread is
+    // uncharacterized.
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMean')).toBe(false);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'scheduleLagMax')).toBe(false);
+    expect(isMetricApproved('crabcanon-plot.html', 'scheduleLagMean')).toBe(false);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'stageUpdateTime')).toBe(true);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'viewportCulledBlocks')).toBe(true);
+    expect(isMetricWarnOnly('crabcanon-plot.html', 'transportEventRatio')).toBe(true);
     expect(isMetricWarnOnly('crabcanon-plot.html', 'executionTime')).toBe(false);
     expect(isMetricWarnOnly('crabcanon-plot.html', 'blocksExecuted')).toBe(false);
     // A metric listed only in another fixture's set is not simply warn-only:

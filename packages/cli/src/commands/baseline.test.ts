@@ -53,7 +53,15 @@ describe('baseline save contract', () => {
         page: 'crabcanon-plot.html',
         runs: Array.from({ length: 5 }, (_, i) => ({
           run: i + 1,
-          metrics: { scheduleLagMean: 12 + i, scheduleLagMax: 40 + i },
+          metrics: {
+            // Approved render cells (#7738/#7815).
+            stageUpdateTime: 8.4 + i * 0.1,
+            viewportCulledBlocks: 794 + i,
+            cacheRebuildCount: 243 + i,
+            // Retired as constant-on-unchanged-code; must be dropped at save time.
+            scheduleLagMean: 12 + i,
+            scheduleLagMax: 40 + i,
+          },
         })),
       },
       {
@@ -96,9 +104,12 @@ describe('baseline save contract', () => {
       'callbackLatencyMax',
       'callbackLatencyMean',
     ]);
+    // scheduleLagMean/scheduleLagMax left the crabcanon contract, so they are
+    // dropped even though the raw run collected them.
     expect(Object.keys(baseline.pages['crabcanon-plot.html']).sort()).toEqual([
-      'scheduleLagMax',
-      'scheduleLagMean',
+      'cacheRebuildCount',
+      'stageUpdateTime',
+      'viewportCulledBlocks',
     ]);
     // maxActionDepth never appears in the baseline.
     expect(JSON.stringify(baseline)).not.toContain('maxActionDepth');
