@@ -130,6 +130,33 @@ async function waitForStageBridge(
   }
 }
 
+/**
+ * Waits for the benchmark bridge to expose a usable Logo engine.
+ *
+ * Readiness is `runFromBlockNow`, not `logo`: the collector wraps that one
+ * method, so a `logo` that exists without it cannot be instrumented and waiting
+ * for the stronger condition is the honest test.
+ */
+async function waitForLogoBridge(
+  page: Page,
+  timeoutMs = 90000,
+): Promise<boolean> {
+  const start = Date.now();
+  for (;;) {
+    const ready = await page.evaluate(() => {
+      const mb = (window as any).__mb;
+      return !!(
+        mb &&
+        mb.logo &&
+        typeof mb.logo.runFromBlockNow === "function"
+      );
+    });
+    if (ready) return true;
+    if (Date.now() - start > timeoutMs) return false;
+    await page.waitForTimeout(250);
+  }
+}
+
 /** Counts block executions via runFromBlockNow (the engine's real per-block
  * path — queue pop/shift is deprecated in the modern app) and tracks nesting.
  * maxDepth keeps its original synchronous JS-nesting meaning. maxLogicalDepth
@@ -143,13 +170,16 @@ const EXECUTION_COLLECTOR_SNIPPET = `
     if (ps.execLatched) return;
     const mb = (window).__mb;
     if (!mb || !mb.logo) return;
-    ps.execLatched = true;
-    ps.exec = { blocksExecuted: 0, maxDepth: 0, depth: 0, maxLogicalDepth: 0 };
+    if (typeof mb.logo.runFromBlockNow !== "function") return;
+    // Built but not published: ps.exec/ps.execLatched are only set once the wrap
+    // is actually in place. Publishing them first would make a failed wrap look
+    // exactly like a latched collector that counted nothing, which is the same
+    // silent-null hole as never installing at all.
+    const exec = { blocksExecuted: 0, maxDepth: 0, depth: 0, maxLogicalDepth: 0 };
     try {
       const logo = mb.logo;
       const origRun = logo.runFromBlockNow.bind(logo);
       logo.runFromBlockNow = function (l, turtle, blk, isflow, receivedArg, queueStart) {
-        const exec = ps.exec;
         exec.depth = exec.depth + 1;
         if (exec.depth > exec.maxDepth) exec.maxDepth = exec.depth;
         exec.blocksExecuted = exec.blocksExecuted + 1;
@@ -179,6 +209,8 @@ const EXECUTION_COLLECTOR_SNIPPET = `
           exec.depth = exec.depth - 1;
         }
       };
+      ps.exec = exec;
+      ps.execLatched = true;
     } catch (e) {
       void e;
     }
@@ -264,39 +296,99 @@ export async function installRenderCollector(page: Page): Promise<boolean> {
   return page.evaluate(() => !!(window as any).__perfsense?.render);
 }
 
-export async function installExecutionCollector(page: Page): Promise<void> {
-  await page.evaluate(EXECUTION_COLLECTOR_SNIPPET);
+/**
+ * Wraps `logo.runFromBlockNow` so blocksExecuted and maxDepth can be read.
+ *
+ * Waits for the Logo bridge first. The snippet returns early when `mb.logo` is
+ * absent and nothing ever retries it, so without this wait the collector
+ * silently never installs — which is what made RainbowConnection produce no
+ * maxDepth cell at all: its phases are openProject then saveExport, neither of
+ * which installs an execution collector, and the plugin's setupPostNav runs
+ * seconds before the real app creates `window.__mb` at the end of activity init.
+ * `ps.exec` then stayed undefined and readPerfsense reported maxDepth as null on
+ * every run.
+ *
+ * Throws when the wrapper is not in place. A caller that silently published the
+ * null would turn a broken collector into a missing baseline cell, and a missing
+ * cell is indistinguishable from a metric nobody watches.
+ */
+export async function installExecutionCollector(
+  page: Page,
+  timeoutMs = 90000,
+): Promise<void> {
+  const latched = await page.evaluate(
+    () => !!(window as any).__perfsense && !!(window as any).__perfsense.exec,
+  );
+  if (latched) return;
+  const ready = await waitForLogoBridge(page, timeoutMs);
+  if (ready) await page.evaluate(EXECUTION_COLLECTOR_SNIPPET);
+  const installed = await page.evaluate(
+    () => !!(window as any).__perfsense?.exec,
+  );
+  if (!installed) {
+    throw new Error(
+      "execution collector did not install: window.__mb.logo never appeared " +
+        "(or runFromBlockNow was not reachable), so blocksExecuted/maxDepth " +
+        "cannot be measured on this page",
+    );
+  }
 }
 
 /**
- * Wraps `__mb.render.refreshCanvas` with a counter. Installed after the
- * stage bridge appears, so every refresh request the app issues from then
- * on is visible. PR #7923 suppressed the load-time flood of these calls;
- * the healthy build therefore records a characteristic low count.
+ * Wraps `__mb.render.refreshCanvas` with a counter, so every refresh request the
+ * app issues from then on is visible. PR #7923 suppressed the load-time flood of
+ * these calls, so the healthy build records 0 here and that 0 is the whole point
+ * of the cell.
+ *
+ * Because 0 is the healthy value, "latched and counted nothing" and "never
+ * installed" must not be able to look alike. They are kept apart three ways:
+ *
+ *   1. `ps.refreshCanvasLatched` is set only by a successful wrap, and
+ *      `ps.refreshCanvasCalls` is initialised in the same breath — so a latched
+ *      page always has a number and a non-latched page never does.
+ *   2. The install RETRIES. `__mb.stage` and `__mb.render` are created at
+ *      different points of activity init, so a single attempt that found the
+ *      stage but not the render object used to give up for good and leave the
+ *      metric null on all five runs.
+ *   3. readPerfsense maps "no latch" to null (never to 0) and reports the latch
+ *      itself as `refreshCanvasWrapperLatched`, and this installer throws when
+ *      the wrap never lands, so the run is discarded instead of published.
  */
 export async function installRefreshCanvasCounter(
   page: Page,
-): Promise<boolean> {
-  const ready = await waitForStageBridge(page);
-  if (!ready) return false;
-  return page.evaluate(() => {
-    const ps = ((window as any).__perfsense =
-      (window as any).__perfsense || {});
-    if (ps.refreshCanvasLatched)
-      return typeof ps.refreshCanvasCalls === "number";
-    const mb = (window as any).__mb;
-    if (!mb || !mb.render || typeof mb.render.refreshCanvas !== "function") {
-      return false;
+  timeoutMs = 90000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const ready = await waitForStageBridge(page, Math.min(5000, timeoutMs));
+    if (ready) {
+      const wrapped = await page.evaluate(() => {
+        const ps = ((window as any).__perfsense =
+          (window as any).__perfsense || {});
+        if (ps.refreshCanvasLatched) return true;
+        const mb = (window as any).__mb;
+        if (!mb || !mb.render || typeof mb.render.refreshCanvas !== "function") {
+          return false;
+        }
+        ps.refreshCanvasLatched = true;
+        ps.refreshCanvasCalls = 0;
+        const orig = mb.render.refreshCanvas.bind(mb.render);
+        mb.render.refreshCanvas = function () {
+          ps.refreshCanvasCalls = ps.refreshCanvasCalls + 1;
+          return orig.apply(mb.render, arguments as any);
+        };
+        return true;
+      });
+      if (wrapped) return;
     }
-    ps.refreshCanvasLatched = true;
-    ps.refreshCanvasCalls = 0;
-    const orig = mb.render.refreshCanvas.bind(mb.render);
-    mb.render.refreshCanvas = function () {
-      ps.refreshCanvasCalls = ps.refreshCanvasCalls + 1;
-      return orig.apply(mb.render, arguments as any);
-    };
-    return true;
-  });
+    if (Date.now() > deadline) break;
+    await page.waitForTimeout(250);
+  }
+  throw new Error(
+    `refreshCanvas counter did not install: window.__mb.render.refreshCanvas ` +
+      `never appeared within ${timeoutMs}ms, so refreshCanvasCallCount cannot be ` +
+      `distinguished from a healthy 0`,
+  );
 }
 
 export async function waitForRunEnd(
@@ -355,6 +447,9 @@ export async function readPerfsense(
       cacheSkippedCount: null,
       viewportCulledFraction: null,
       refreshCanvasCallCount: null,
+      // 1 when the refreshCanvas wrapper is actually in the page, 0 when it is
+      // not. Distinct from refreshCanvasCallCount, whose healthy value IS 0.
+      refreshCanvasWrapperLatched: null,
       panSteps: null,
     };
     const mean = (arr: number[]) =>
@@ -402,6 +497,24 @@ export async function readPerfsense(
           : viaTransport / (viaTransport + viaFallback);
     }
 
+    // #7923: refreshCanvas() calls across the whole run. Reverting the
+    // _suppressRefresh guard makes the load repaint, so this counter spikes; the
+    // healthy build records 0, because suppressing the repaint is the
+    // optimization. A wrapper that never installed must therefore read as null
+    // (no data) and never as 0 — 0 here means "latched and nothing was
+    // requested", which is a real, healthy observation.
+    //
+    // Deliberately NOT inside the `ps.render` branch below: this counter has its
+    // own installer and its own page-side state. RainbowConnection approves it
+    // without approving a single render-collector plugin, so gating the read on
+    // ps.render would report null on exactly the fixture that needs the cell.
+    out.refreshCanvasCallCount =
+      ps.refreshCanvasLatched === true &&
+      typeof ps.refreshCanvasCalls === "number"
+        ? ps.refreshCanvasCalls
+        : null;
+    out.refreshCanvasWrapperLatched = ps.refreshCanvasLatched === true ? 1 : 0;
+
     // Render axis. Frames are [startMs, durationMs] pairs; windowStart/windowEnd
     // delimit the interact scenario's pan so idle frames outside it never dilute
     // the sample.
@@ -447,14 +560,6 @@ export async function readPerfsense(
       out.viewportCulledFraction =
         culledPeak !== null && blockTotal !== null && blockTotal > 0
           ? culledPeak / blockTotal
-          : null;
-      // #7923: refreshCanvas() calls across the whole run. Reverting the
-      // _suppressRefresh guard makes the load repaint, so this counter
-      // spikes; the healthy build leaves it near zero outside explicit
-      // interactions.
-      out.refreshCanvasCallCount =
-        typeof ps.refreshCanvasCalls === "number"
-          ? ps.refreshCanvasCalls
           : null;
       // #7923: how many stage.update() frames the load actually painted. With
       // _suppressRefresh set (js/activity.js:2152-2159) refreshCanvas() returns
