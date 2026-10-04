@@ -63,9 +63,9 @@ describe("Benchmark Matrix contract", () => {
       "transportEventCount",
       "synthsRetained",
     ]);
-    // The repeatedRun cells are PR #7848's invariants. The heap probes are gone.
+    // The repeatedRun cells are PR #7848's invariants. The heap probes and
+    // maxQueueDepth are gone.
     expect(getApprovedMetrics("musical-tree.html")).toEqual([
-      "maxQueueDepth",
       "executionTime",
       "canvasInkCoverage",
       "canvasInkDrift",
@@ -99,16 +99,16 @@ describe("Benchmark Matrix contract", () => {
       "index.html": 3,
       "RainbowConnection.html": 5,
       "Frere-Jacques.html": 6,
-      "musical-tree.html": 5,
+      "musical-tree.html": 4,
       "ascending-notes-color-spiral.html": 2,
       "crabcanon-plot.html": 5,
     });
-    // 26 cells total, down from 39 before the 2026-10 cleanup.
+    // 25 cells total, down from 39 before the 2026-10 cleanup.
     const total = BENCHMARK_MATRIX.reduce(
       (sum, c) => sum + c.metrics.length,
       0,
     );
-    expect(total).toBe(26);
+    expect(total).toBe(25);
     // bootstrapTotal survives: it is the one cell that measures the repo rather
     // than a single PR, and it is the fixture that proves the harness is honest.
     expect(isMetricApproved("index.html", "bootstrapTotal")).toBe(true);
@@ -155,6 +155,19 @@ describe("Benchmark Matrix contract", () => {
       expect(isMetricApproved(fixture, "maxQueueDepth")).toBe(false);
       expect(isMetricApproved(fixture, "executionTime")).toBe(false);
       expect(isMetricApproved(fixture, "blocksExecuted")).toBe(false);
+    }
+    // maxQueueDepth left musical-tree too, and is now approved nowhere: at a
+    // median near 8 its quantization floor (2 units = 25%) is above the 20%
+    // limit configured for it, so it could fail on rounding alone.
+    for (const fixture of [
+      "index.html",
+      "RainbowConnection.html",
+      "Frere-Jacques.html",
+      "musical-tree.html",
+      "ascending-notes-color-spiral.html",
+      "crabcanon-plot.html",
+    ]) {
+      expect(isMetricApproved(fixture, "maxQueueDepth")).toBe(false);
     }
     expect(isMetricApproved("Frere-Jacques.html", "scheduleCount")).toBe(false);
     expect(isMetricApproved("musical-tree.html", "maxLogicalDepth")).toBe(
@@ -238,9 +251,13 @@ describe("Benchmark Matrix contract", () => {
     expect(
       isMetricUnverified("ascending-notes-color-spiral.html", "maxDepth"),
     ).toBe(false);
-    expect(isMetricUnverified("musical-tree.html", "maxQueueDepth")).toBe(
-      false,
-    );
+    // No approved cell is silently marked unverified: each one is either an exact
+    // fingerprint or carries a real threshold.
+    for (const contract of BENCHMARK_MATRIX) {
+      for (const metric of contract.metrics) {
+        expect(isMetricUnverified(contract.fixture, metric)).toBe(false);
+      }
+    }
     expect(isMetricUnverified("RainbowConnection.html", "exportMIDITime")).toBe(
       false,
     );

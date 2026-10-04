@@ -315,7 +315,6 @@ describe("GitHub Action E2E", () => {
       const run0 = results[0].runs[0].metrics;
       // All three phases ran on the page; musical-tree approved metrics flowed.
       expect(run0.executionTime).toBeTypeOf("number");
-      expect(run0.maxQueueDepth).toBeTypeOf("number");
       // #7848's ink fingerprints need a canvas that actually paints. The mock's
       // stage object only exposes childrenCount/update and never draws, so both
       // read null here. They are in the contract precisely so that this kind of
@@ -329,6 +328,11 @@ describe("GitHub Action E2E", () => {
       // collection instead of carrying a cell nothing would compare.
       expect(run0.memoryDelta).toBeUndefined();
       expect(run0.retainedHeap).toBeUndefined();
+      // maxQueueDepth left musical-tree in 2026-10: it protected none of the
+      // seven perf PRs, and at a median near 8 its quantization floor sat above
+      // its configured 20% limit. The mock would have measured it fine; it is
+      // the contract, not the collector, that now drops it.
+      expect(run0.maxQueueDepth).toBeUndefined();
       // Phase metrics not approved for musical-tree were rejected at collection.
       expect(run0.projectLoadTime).toBeUndefined();
       expect(run0.saveTime).toBeUndefined();

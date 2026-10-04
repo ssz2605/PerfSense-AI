@@ -152,7 +152,6 @@ function buildCompleteCurrentResults(): PageResult[] {
       runs: [0, 1, 2, 3, 4].map((i) => ({
         run: i + 1,
         metrics: {
-          maxQueueDepth: 12,
           executionTime: 4500,
           memoryDelta: 1e6,
           retainedHeap: 2e6,

@@ -172,13 +172,13 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // heap measurement whose CI spread is not characterized, so it could only
     // ever warn. #7848 keeps its two canvas invariants, which are the ones a
     // re-wired cleanup actually moves.
-    metrics: [
-      "maxQueueDepth",
-      "executionTime",
-      "canvasInkCoverage",
-      "canvasInkDrift",
-      "synthsRetained",
-    ],
+    //
+    // Removed (2026-10): maxQueueDepth. It protects none of the seven merged
+    // perf PRs, and at a median near 8 its own quantization floor (2 units =
+    // 25%) sits above the 20% limit configured for it, so it is the likeliest
+    // remaining cell to fail baseline validate on nothing but rounding. The
+    // collector still exists and still reports; it is simply not a gate.
+    metrics: ["executionTime", "canvasInkCoverage", "canvasInkDrift", "synthsRetained"],
     // #7848's invariants as exact fingerprints: inkCoverage ~constant and
     // inkDrift ~0 on a healthy build, and both collapse to 0 / grow when
     // cleanup is re-wired to clear the drawing.

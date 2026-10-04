@@ -97,7 +97,6 @@ function healthyPages(): BaselineData["pages"] {
       synthsRetained: stats([0, 0, 0, 0, 0]),
     },
     "musical-tree.html": {
-      maxQueueDepth: stats([22, 22, 22, 22, 22]),
       executionTime: stats([41000, 41100, 41200, 41300, 41400]),
       // #7848 invariants: a natural completion preserves the drawing, and N
       // completions accumulate no further ink. Values are deliberately
@@ -127,7 +126,10 @@ function healthyPages(): BaselineData["pages"] {
 /**
  * A capture that still carries the cells retired from the contract. `baseline
  * save` filters these out, so this is the shape of a hand-edited or pre-retirement
- * baseline — it must be reported, not silently accepted.
+ * baseline - it must be reported, not silently accepted.
+ *
+ * maxQueueDepth appears twice on purpose: it left musical-tree in 2026-10 and
+ * was already retired on the other two, so it is now an orphan everywhere.
  */
 function pagesWithRetiredCells(): ReturnType<typeof healthyPages> {
   const pages = healthyPages() as Record<string, Record<string, unknown>>;
@@ -459,40 +461,45 @@ describe("validateBaseline", () => {
   });
 
   describe("count-metric quantization floor", () => {
+    // Subject: viewportCulledBlocks on crabcanon, a count metric. It replaces
+    // musical-tree's maxQueueDepth, which left the contract in 2026-10 for the
+    // very reason this logic exists. The small-median values below are
+    // synthetic - the real crabcanon median is ~795 - because what is under
+    // test is the floor arithmetic, not a particular capture.
     it("does not fail a count metric whose limit is finer than one unit", () => {
-      // Real case: maxQueueDepth median 8, p10 8 -> p90 10 is a one-unit
-      // rounding step, but a 20% limit reads it as 25% of noise.
+      // Median 8, p10 8 -> p90 10 is a one-unit rounding step, but a 20% limit
+      // reads it as 25% of noise.
       const pages = healthyPages();
-      pages["musical-tree.html"].maxQueueDepth = stats([8, 8, 8, 10, 10]);
+      pages["crabcanon-plot.html"].viewportCulledBlocks = stats([8, 8, 8, 10, 10]);
       const result = validateBaseline(baseline(pages), {
-        validity: { maxSpreadPct: { maxQueueDepth: 20 } },
+        validity: { maxSpreadPct: { viewportCulledBlocks: 20 } },
       });
-      expect(findDefect(result, "maxQueueDepth", "spread")).toBeUndefined();
+      expect(findDefect(result, "viewportCulledBlocks", "spread")).toBeUndefined();
       expect(result.ok).toBe(true);
     });
 
     it("still reports the misconfiguration when the spread is real", () => {
       const pages = healthyPages();
-      pages["musical-tree.html"].maxQueueDepth = stats([2, 7, 8, 9, 15]);
+      pages["crabcanon-plot.html"].viewportCulledBlocks = stats([2, 7, 8, 9, 15]);
       const result = validateBaseline(baseline(pages), {
-        validity: { maxSpreadPct: { maxQueueDepth: 20 } },
+        validity: { maxSpreadPct: { viewportCulledBlocks: 20 } },
       });
-      const d = findDefect(result, "maxQueueDepth", "spread");
+      const d = findDefect(result, "viewportCulledBlocks", "spread");
       expect(d?.severity).toBe("warn");
       expect(d?.detail).toContain("quantization floor");
       expect(result.ok).toBe(true);
     });
 
     it("gates a count metric normally once its limit clears the floor", () => {
-      // Median 8 -> floor 25%, so a 40% limit is a genuine tolerance.
+      // Median 6 -> floor 33%, so a 40% limit is a genuine tolerance.
       const pages = healthyPages();
-      pages["musical-tree.html"].maxQueueDepth = stats([4, 5, 6, 12, 14]);
+      pages["crabcanon-plot.html"].viewportCulledBlocks = stats([4, 5, 6, 12, 14]);
       const result = validateBaseline(baseline(pages), {
-        validity: { maxSpreadPct: { maxQueueDepth: 40 } },
+        validity: { maxSpreadPct: { viewportCulledBlocks: 40 } },
       });
-      expect(findDefect(result, "maxQueueDepth", "spread")?.severity).toBe(
-        "fail",
-      );
+      expect(
+        findDefect(result, "viewportCulledBlocks", "spread")?.severity,
+      ).toBe("fail");
       expect(result.ok).toBe(false);
     });
 
@@ -697,7 +704,7 @@ describe("defect kinds are exhaustive over what the gate can report", () => {
     pages["crabcanon-plot.html"].scheduleLagMean = stats([
       1e-13, 2e-13, 3e-13, 4e-13, 5e-13,
     ]);
-    pages["musical-tree.html"].maxQueueDepth = stats([228, 229, 230]);
+    pages["musical-tree.html"].executionTime = stats([41000, 41100, 41200]);
     const b = baseline(pages);
     const result = validateBaseline(b, {
       previous: baseline(healthyPages()),
