@@ -36,6 +36,19 @@ export interface BenchmarkConfig {
   fixtures?: Record<string, string>;
   /** Per-run wall-clock budget in ms (default 120000). */
   runTimeoutMs?: number;
+  /**
+   * Scroll-key steps the `interact` scenario issues to pan the workspace
+   * (default 24). Each step moves the blocks container by half a canvas
+   * height, so the workspace is traversed end to end.
+   */
+  panSteps?: number;
+  /** Pause after each pan step in ms (default 120). Lets the rAF loop paint. */
+  panSettleMs?: number;
+  /**
+   * Runs the `repeatedRun` scenario performs inside one page load
+   * (default 10). Bounded by runTimeoutMs.
+   */
+  repeatRuns?: number;
 }
 
 export interface BaselineMetricStats {

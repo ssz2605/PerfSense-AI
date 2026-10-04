@@ -135,6 +135,30 @@ export async function run(argv: string[]): Promise<void> {
       'the two sides measure differently, so no verdict is issued'
     : null;
 
+  // ── Certification gate ────────────────────────────────────────────────
+  // `mismatch` is withheld outright above. The remaining uncertifiable case is
+  // `unknown`: a baseline that records no harness revision, or no environment
+  // fingerprint, cannot be shown to have measured the same thing this run did.
+  // That difference is unfalsifiable from the numbers, so the delta is still
+  // reported — it is a real measurement — but every verdict is labelled
+  // uncertifiable rather than presented as a finding about this change.
+  const uncertifiableReasons: string[] = [];
+  if (harnessState === 'mismatch') {
+    uncertifiableReasons.push(
+      `baseline used PerfSense ${baselineHarnessRef}, this run used ${runHarnessRef}`,
+    );
+  } else if (harnessState === 'unknown') {
+    uncertifiableReasons.push(
+      baselineHarnessRef
+        ? 'this run does not record a PerfSense revision, so it cannot be shown to match the baseline'
+        : 'the baseline records no PerfSense revision',
+    );
+  }
+  if (baselineEnv === null) {
+    uncertifiableReasons.push('the baseline has no environment fingerprint (legacy v1 schema)');
+  }
+  const comparisonCertified = uncertifiableReasons.length === 0;
+
   const allResults: CheckResultEntry[] = [];
   let hasRegression = false;
   let hasWarning = false;
@@ -294,6 +318,11 @@ export async function run(argv: string[]): Promise<void> {
     }
   }
 
+  // Every verdict inherits the certification state of the comparison it came
+  // from, so a per-metric row can never read as certified when the baseline
+  // cannot support the claim.
+  for (const r of allResults) r.comparisonCertified = comparisonCertified;
+
   // ── Coverage contract (missing metrics stay visible) ─────────────────
   const contract: ContractSummary = buildContract(current, baseline);
 
@@ -447,6 +476,8 @@ export async function run(argv: string[]): Promise<void> {
       ageDays,
       stale: baselineStale,
       hasEnv: baselineEnv !== null,
+      comparisonCertified,
+      uncertifiableReasons,
       harness: {
         baselineRef: baselineHarnessRef,
         runRef: runHarnessRef,
@@ -474,6 +505,8 @@ export async function run(argv: string[]): Promise<void> {
         ageDays,
         stale: baselineStale,
         hasEnv: baselineEnv !== null,
+        comparisonCertified,
+        uncertifiableReasons,
         harness: { baselineRef: baselineHarnessRef, runRef: runHarnessRef, state: harnessState },
       },
       prComment: comment,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generatePRComment, type CheckResult } from './index';
+import { generatePRComment, type CheckResult, type CheckResultEntry } from './index';
 import type { LikelyCause } from '@perfsense/correlation-engine';
 
 const PR_27 = { pr: '27', head: 'c46d920', baselineRef: 'origin/master', matrix: 'Music Blocks Benchmark Matrix' };
@@ -72,6 +72,7 @@ describe('matrix filtering', () => {
         makeEntry({ page: 'Frere-Jacques.html', metric: 'callbackLatencyMean', status: 'PASS', deltaPercent: 1.2, baselineMedian: 40, currentMedian: 40.5 }),
         // Not part of the approved Frère Jacques matrix — must not appear.
         makeEntry({ page: 'Frere-Jacques.html', metric: 'projectLoadTime', status: 'REGRESSION', deltaPercent: 33.7, baselineMedian: 8959, currentMedian: 11977 }),
+        // Still collected, but retired from the contract.
         makeEntry({ page: 'Frere-Jacques.html', metric: 'executionTime', status: 'REGRESSION', deltaPercent: 9.9, baselineMedian: 100, currentMedian: 110 }),
         // Recursion depth belongs to the three fixtures that own it explicitly.
         makeEntry({ page: 'Frere-Jacques.html', metric: 'maxLogicalDepth', status: 'REGRESSION', deltaPercent: 5, baselineMedian: 10, currentMedian: 10.5 }),
@@ -86,12 +87,13 @@ describe('matrix filtering', () => {
 
     expect(comment).toContain('callbackLatencyMean');
     expect(comment).toContain('scheduleLagMean');
-    // Frère now owns executionTime, so it must reach the report.
-    expect(comment).toContain('executionTime');
     expect(comment).not.toContain('projectLoadTime');
     expect(comment).not.toContain('maxLogicalDepth');
     expect(comment).not.toContain('maxActionDepth');
     expect(comment).not.toContain('retainedHeap');
+    // executionTime is only approved for musical-tree and the spiral, never for
+    // Frère, so it must not surface here even though the run collected it.
+    expect(comment).not.toContain('executionTime');
   });
 
   it('groups every fixture row in the summary and metrics under their fixture', () => {
@@ -248,7 +250,11 @@ describe('baseline provenance banner', () => {
 
   it('stays silent when neither side is in the workflow', () => {
     const comment = generatePRComment(withHarness('unknown', null, null), PR_27);
-    expect(comment).not.toContain('PerfSense revision');
+    // No banner (that one is scoped to "the baseline is the stale side"), but
+    // the verdict is still reported as uncertifiable: with neither side
+    // fingerprinted there is nothing to certify comparability against.
+    expect(comment).not.toContain('Baseline records no PerfSense revision');
+    expect(comment).toContain('uncertifiable');
   });
 
   it('renders nothing when no harness metadata is supplied at all', () => {
@@ -260,6 +266,74 @@ describe('baseline provenance banner', () => {
     const comment = generatePRComment(result, PR_27);
     expect(comment).not.toContain('PerfSense revision');
     expect(comment).toContain('legacy v1');
+  });
+});
+
+describe('baseline certification', () => {
+  const certifiedResult = (over: Partial<CheckResultEntry> = {}): CheckResult => ({
+    results: [makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'WARNING', deltaPercent: 29.8, ...over })],
+    summary: { pass: 0, warning: 1, regression: 0, failed: false },
+    baselineMeta: {
+      envMatched: true,
+      ageDays: 1,
+      stale: false,
+      hasEnv: true,
+      comparisonCertified: true,
+      uncertifiableReasons: [],
+      harness: { baselineRef: '8c57213', runRef: '8c57213', state: 'match' },
+    },
+  });
+
+  it('certifies a matching harness with an environment fingerprint', () => {
+    const comment = generatePRComment(certifiedResult(), PR_27);
+    expect(comment).not.toContain('uncertifiable');
+    expect(comment).toContain('| bootstrapTotal |');
+    expect(comment).not.toContain('uncertified');
+  });
+
+  it('marks a mismatched harness uncertifiable', () => {
+    const result = certifiedResult();
+    result.baselineMeta = {
+      ...result.baselineMeta!,
+      comparisonCertified: false,
+      uncertifiableReasons: ['the baseline used a different PerfSense revision'],
+      harness: { baselineRef: '53ae5d2', runRef: '8c57213', state: 'mismatch' },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('every verdict is withheld');
+    expect(comment).toContain('uncertifiable');
+  });
+
+  it('marks a legacy baseline uncertifiable', () => {
+    const result = certifiedResult();
+    // Both the metadata and the entry carry the state: the reporter marks a row
+    // from the row itself, so a meta-only flag would leave the table unmarked.
+    result.results[0].comparisonCertified = false;
+    result.baselineMeta = {
+      ...result.baselineMeta!,
+      hasEnv: false,
+      comparisonCertified: false,
+      uncertifiableReasons: [
+        'the baseline records no PerfSense revision',
+        'the baseline has no environment fingerprint (legacy v1 schema)',
+      ],
+      harness: { baselineRef: null, runRef: '8c57213', state: 'unknown' },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('Baseline records no PerfSense revision');
+    expect(comment).toContain('legacy v1');
+    expect(comment).toContain('Every verdict in this report is uncertifiable');
+    // The regression is still displayed - it is a real measurement - but it is
+    // labelled so it cannot be read as an actionable finding.
+    expect(comment).toContain('**bootstrapTotal** — +29.8% · uncertified');
+    expect(comment).toContain('Warning · uncertified');
+  });
+
+  it('does not mark PASS rows uncertified, only rows that assert a verdict', () => {
+    const result = certifiedResult({ status: 'PASS', deltaPercent: 1.2 });
+    result.results[0].comparisonCertified = false;
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('| No meaningful change |');
   });
 });
 

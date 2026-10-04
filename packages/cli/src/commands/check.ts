@@ -123,11 +123,16 @@ export interface DeadSeamFinding {
 /**
  * Layer A seam tripwire: scans current page results for a dead Tone.Transport
  * seam. Only pages whose fixture approves an audio metric participate. A seam
- * is dead when no transport.schedule event fired (scheduleCount is 0/none) and
- * no audio observation survived into the results — i.e. every audio column
+ * is dead when transportEventRatio is absent or below the floor and no audio
+ * observation survived into the results — i.e. every audio column
  * would silently no-op. This is a hard precondition, not a statistical rule:
  * it never alters an approved metric's status, it simply refuses to report
  * "no data" as a successful audio run.
+ *
+ * transportEventRatio replaced the retired scheduleCount here: scheduleCount
+ * was dropped from the contract, so driver.ts no longer collects it and it
+ * arrived null on every run, which made the check unable to tell a dead seam
+ * from an uncollected counter.
  */
 export function findDeadSeamPages(
   current: PageResult[],
@@ -136,7 +141,7 @@ export function findDeadSeamPages(
   const findings: DeadSeamFinding[] = [];
   for (const pageResult of current) {
     if (!isAudioApproved(pageResult.page)) continue;
-    let scheduleCount: number | null = null;
+    let transportEventRatio: number | null = null;
     const audio: Record<string, number | null> = {
       callbackLatencyMean: null,
       callbackLatencyMax: null,
@@ -145,12 +150,14 @@ export function findDeadSeamPages(
     };
     for (const run of pageResult.runs) {
       const m = run.metrics;
-      if (typeof m.scheduleCount === 'number') scheduleCount = m.scheduleCount;
+      if (typeof m.transportEventRatio === 'number') {
+        transportEventRatio = m.transportEventRatio;
+      }
       for (const key of Object.keys(audio)) {
         if (typeof m[key] === 'number') audio[key] = m[key] as number;
       }
     }
-    const check = checkTransportSeamAlive({ ...audio, scheduleCount });
+    const check = checkTransportSeamAlive({ ...audio, transportEventRatio });
     if (!check.alive) {
       findings.push({ page: pageResult.page, check });
     }

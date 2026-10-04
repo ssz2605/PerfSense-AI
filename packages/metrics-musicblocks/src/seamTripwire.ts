@@ -7,9 +7,15 @@
  * come back null. This check turns "no data" into an explicit finding rather
  * than an empty row.
  *
- * Intentionally standalone: it performs no statistical comparison, touches no
- * approved metric semantics, and is not wired into the report/statistical path
- * yet. It is the unit-tested building block for the future gate.
+ * The signal is transportEventRatio, not the retired scheduleCount.
+ * scheduleCount was dropped from the contract, so driver.ts:129-135 no longer
+ * collects it and it read null on every run — which made this check
+ * vacuously fall through to the audio-observation branch and could never
+ * distinguish "seam dead" from "counter not collected". transportEventRatio is
+ * approved on both audio fixtures, so it is always present, and it is a
+ * strictly stronger signal: it counts BOTH sides of the seam
+ * (logo.js:1841-1856), so it falls off 1.0 the moment scheduling reverts
+ * rather than merely reporting an absolute zero.
  */
 
 export const FRERE_JACQUES_TRANSPORT_METRICS = [
@@ -21,31 +27,56 @@ export const FRERE_JACQUES_TRANSPORT_METRICS = [
 
 export interface TransportSeamCheck {
   alive: boolean;
-  /** transport.schedule events that fired, when the collector reported them. */
-  scheduledEvents: number | null;
+  /** transportEventRatio, when the collector reported it. */
+  transportEventRatio: number | null;
   reason?: string;
 }
+
+/**
+ * The ratio below which the transport seam is considered dead. Locally the
+ * honest value on Frère Jacques is ~0.025 (268 transport.schedule calls vs
+ * 10330 setTimeout fallback delays), because the app schedules note *delays*
+ * through Tone.Transport only opportunistically — Tone.Transport is never
+ * started (transportState stays "stopped") even though Tone.context.state is
+ * "running". So this is a floor well under 1, not a near-1.0 threshold: it
+ * fires only when the transport path is entirely absent, which is the
+ * regression this tripwire exists to catch. A ratio at or above this value
+ * means transport.schedule did fire.
+ */
+export const TRANSPORT_SEAM_MIN_RATIO = 0.001;
 
 export function checkTransportSeamAlive(
   metrics: Record<string, number | null>,
 ): TransportSeamCheck {
-  const scheduledEvents =
-    typeof metrics.scheduleCount === "number" ? metrics.scheduleCount : null;
+  const ratio =
+    typeof metrics.transportEventRatio === "number" ? metrics.transportEventRatio : null;
   const observations = FRERE_JACQUES_TRANSPORT_METRICS.filter(
     (m) => typeof metrics[m] === "number",
   ).length;
 
-  if (scheduledEvents !== null && scheduledEvents > 0) {
-    return { alive: true, scheduledEvents };
+  // The collector reported a share, and the transport path is still in use.
+  if (ratio !== null && ratio >= TRANSPORT_SEAM_MIN_RATIO) {
+    return { alive: true, transportEventRatio: ratio };
   }
+  // The collector reported a share but the transport path is gone.
+  if (ratio !== null) {
+    return {
+      alive: false,
+      transportEventRatio: ratio,
+      reason:
+        `transportEventRatio ${ratio} is below ${TRANSPORT_SEAM_MIN_RATIO}: note scheduling is going through the setTimeout fallback (logo.js:1841-1856) instead of Tone.Transport, so the #7703 seam has regressed`,
+    };
+  }
+  // No ratio collected at all. Audio observations alone are weaker evidence
+  // (they can survive on a synthesised clock) but are still not "no data".
   if (observations > 0) {
-    return { alive: true, scheduledEvents };
+    return { alive: true, transportEventRatio: null };
   }
   return {
     alive: false,
-    scheduledEvents,
+    transportEventRatio: null,
     reason:
-      "no transport.schedule events observed (scheduleCount is null or 0 and all audio metrics are null); the Tone.Transport seam may be dead, e.g. playback scheduling reverted to setTimeout",
+      "no transport data observed (transportEventRatio is null or 0 and all audio metrics are null); the Tone.Transport seam may be dead, e.g. playback scheduling reverted to setTimeout",
   };
 }
 

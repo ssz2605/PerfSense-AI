@@ -54,15 +54,82 @@ function renderPrompt(template: string, vars: Record<string, string>): string {
 }
 
 export function buildSystemPrompt(correlation: CorrelationResult, gitContext: GitContext): string {
+  const briefing = buildEvidenceBriefing(correlation);
   const template = loadPromptTemplate('regression-analysis.md');
   if (!template) {
-    return 'Analyze the following performance regression and provide optimization suggestions.';
+    // Never degrade to a bare instruction. If the prompt file is missing the
+    // model still gets the data, the evidence level and the rules — losing the
+    // template may cost formatting, but losing the rules reintroduces exactly
+    // the invented-root-cause failure this prompt exists to prevent.
+    return (
+      'You are an expert web performance engineer analyzing a regression.\n\n' +
+      `## Evidence Level\n${briefing}\n\n${EVIDENCE_RULES}\n\n` +
+      `## Regression Data\n${JSON.stringify(correlation, null, 2)}\n\n` +
+      `## Git Context\n${JSON.stringify(gitContext, null, 2)}\n`
+    );
   }
   return renderPrompt(template, {
     correlationJson: JSON.stringify(correlation, null, 2),
     gitContext: JSON.stringify(gitContext, null, 2),
+    evidenceBriefing: briefing,
+    evidenceRules: EVIDENCE_RULES,
   });
 }
+
+/**
+ * Per-metric statement of what evidence level the deterministic correlation
+ * engine actually reached, plus what that permits the model to claim.
+ *
+ * The model is otherwise left to infer causality from a list of changed files,
+ * which it reliably does by inventing one. Passing the tier explicitly makes
+ * "no direct code-path evidence was established" an input rather than something
+ * the model has to notice, so the absence of a cause is reported as an absence
+ * instead of being filled in.
+ */
+export function buildEvidenceBriefing(correlation: CorrelationResult): string {
+  const lines: string[] = [];
+  for (const [metric, mc] of Object.entries(correlation.metrics)) {
+    const cause = mc.likelyCause;
+    const at = cause?.sourceLocation?.originalLine;
+    const where = cause ? `\`${cause.source}${at ? `:${at}` : ''}\`` : 'none';
+    if (cause) {
+      lines.push(`- ${metric}: evidence tier \`${cause.confidence}\`, attributed to ${where}.`);
+    } else {
+      lines.push(`- ${metric}: evidence tier \`none\` - no changed file was found on the measured code path.`);
+    }
+  }
+  if (lines.length === 0) lines.push('- (no regressions were correlated)');
+  return lines.join('\n');
+}
+
+/**
+ * The rule that separates a measurement from a cause, restated in the prompt so
+ * statistical significance is never read as proof of causation.
+ */
+export const EVIDENCE_RULES = [
+  'Statistical significance is NOT causal evidence. A significant p-value (for example a',
+  'Mann-Whitney result below 0.05) means the two distributions differ; it says nothing about',
+  'which change produced the difference. Never present it as proof that a particular code',
+  'change caused the regression.',
+  '',
+  'For a metric whose evidence tier is `none`:',
+  '- state explicitly that no direct code-path correlation was established for it',
+  '- do NOT invent a root cause, and do NOT name a file, line or change as the cause',
+  '- do NOT claim or imply that this PR caused the regression',
+  '- note that measurement or environment differences are possible explanations',
+  '- recommend verifying against a compatible baseline, or profiling, as a diagnostic',
+  '  next step only',
+  '',
+  'For a metric that has an evidence tier:',
+  '- you may name the attributed file/line and explain why that change is consistent with',
+  '  the observed direction and magnitude',
+  '- keep what the diff shows visibly separate from what you are inferring',
+  '',
+  'For every metric:',
+  '- do NOT offer generic optimization advice. "Consider code splitting, caching, or',
+  '  profiling" is not an analysis. Name the specific operation and location, or say you',
+  '  have no evidence and stop.',
+].join('\n');
 
 async function callOpenAI(
   systemPrompt: string,
@@ -97,6 +164,7 @@ async function callOpenAI(
 async function callAnthropic(
   systemPrompt: string,
   config: AIProviderConfig,
+  input: AIInput,
 ): Promise<AIOutput> {
   const apiKey = config.apiKey || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -114,7 +182,7 @@ async function callAnthropic(
       model: config.model || DEFAULT_MODELS.anthropic,
       max_tokens: 2000,
       system: systemPrompt,
-      messages: [{ role: 'user', content: 'Analyze the regression data and provide optimization suggestions.' }],
+      messages: [{ role: 'user', content: buildEvidenceRequest(input) }],
     }),
   });
   if (!response.ok) {
@@ -123,6 +191,16 @@ async function callAnthropic(
   const data = await response.json() as any;
   const content = data.content?.[0]?.text || '';
   return parseAIResponse(content);
+}
+
+/** User turn for providers that follow the user message more reliably than the system prompt. */
+function buildEvidenceRequest(input: AIInput): string {
+  return (
+    'Analyze the regression data in the system prompt.\n\n' +
+    `Evidence level reached by the deterministic engine:\n${buildEvidenceBriefing(input.correlation)}\n\n` +
+    `${EVIDENCE_RULES}\n\n` +
+    'Respond now; do not ask for more data.'
+  );
 }
 
 export function buildOllamaUserMessage(input: AIInput): string {
@@ -145,6 +223,7 @@ export function buildOllamaUserMessage(input: AIInput): string {
         `p=${r.pValue.toFixed(3)} effect=${r.effectSize.toFixed(2)}`,
     );
   }
+  lines.push('', `Evidence level:`, buildEvidenceBriefing(input.correlation), '', EVIDENCE_RULES);
   const cross = input.correlation.crossMetricCauses;
   if (cross.length > 0) {
     lines.push(`Cross-metric causes: ${JSON.stringify(cross)}`);
@@ -212,7 +291,7 @@ export async function analyzeRegression(
     case 'openai':
       return callOpenAI(systemPrompt, config);
     case 'anthropic':
-      return callAnthropic(systemPrompt, config);
+      return callAnthropic(systemPrompt, config, input);
     case 'ollama':
       return callOllama(systemPrompt, config, input);
     default:

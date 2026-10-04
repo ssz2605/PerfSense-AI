@@ -30,6 +30,12 @@ export interface CheckResultEntry {
   baselineAgeDays: number | null;
   /** Deterministic explanation for likely-noise / inconclusive results. */
   note: string | null;
+  /**
+   * False when the baseline cannot be shown to have measured this run the same
+   * way (no harness revision, or no environment fingerprint). Absent means
+   * certified, so producers predating the field keep their existing meaning.
+   */
+  comparisonCertified?: boolean;
 }
 
 export interface BaselineMeta {
@@ -37,6 +43,10 @@ export interface BaselineMeta {
   ageDays: number | null;
   stale: boolean;
   hasEnv: boolean;
+  /** True when both sides recorded the same harness and the baseline has an env fingerprint. */
+  comparisonCertified?: boolean;
+  /** Why the comparison cannot be certified; empty/absent when it can. */
+  uncertifiableReasons?: string[];
   /** Which PerfSense revision produced each side of the comparison. */
   harness?: {
     baselineRef: string | null;
@@ -132,7 +142,7 @@ function fixtureTable(entries: CheckResultEntry[]): string[] {
   for (const e of entries) {
     const status = isMetricUnverified(fixture, e.metric)
       ? 'Unverified'
-      : statusWord(e.status);
+      : statusWord(e.status) + uncertifiedSuffix(e);
     lines.push(
       `| ${e.metric} | ${fmtMetricValue(e.baselineMedian, e.metric)} | ${fmtMetricValue(e.currentMedian, e.metric)} | ${formatDeltaPercent(e.deltaPercent)} | ${status} |`,
     );
@@ -244,7 +254,7 @@ function detailBlock(
   aiPerMetric?: Record<string, string>,
 ): string[] {
   const lines: string[] = [];
-  lines.push(`${icon} **${entry.metric}** — ${formatDeltaPercent(entry.deltaPercent)}`);
+  lines.push(`${icon} **${entry.metric}** — ${formatDeltaPercent(entry.deltaPercent)}${uncertifiedSuffix(entry)}`);
   lines.push('');
   lines.push(
     `Baseline: ${fmtMetricValue(entry.baselineMedian, entry.metric)} ` +
@@ -280,6 +290,48 @@ function detailBlock(
   return lines;
 }
 
+/**
+ * Why this comparison cannot be certified, or an empty list when it can. A
+ * baseline that records neither the harness revision nor an environment
+ * fingerprint cannot be shown to have measured the same thing the current run
+ * did, so a delta may describe a changed measurement definition rather than the
+ * code under test.
+ */
+function uncertifiedReasons(meta: BaselineMeta | undefined): string[] {
+  if (!meta) return [];
+  if (meta.uncertifiableReasons !== undefined) return meta.uncertifiableReasons;
+  // Fall back to the raw fields for producers predating the reasons list.
+  const reasons: string[] = [];
+  const h = meta.harness;
+  if (h?.state === 'mismatch') reasons.push('the baseline used a different PerfSense revision');
+  else if (h?.state === 'unknown') {
+    reasons.push(
+      h.runRef && !h.baselineRef
+        ? 'the baseline records no PerfSense revision'
+        : h.baselineRef && !h.runRef
+          ? 'this run does not record a PerfSense revision'
+          : 'neither side records a PerfSense revision',
+    );
+  }
+  if (meta.hasEnv === false) reasons.push('the baseline has no environment fingerprint');
+  return reasons;
+}
+
+/** Statuses that assert something a reader might act on. */
+const VERDICT_STATUSES = new Set<CheckStatus>([
+  'REGRESSION',
+  'WARNING',
+  'IMPROVEMENT',
+  'LIKELY_NOISE',
+  'INCONCLUSIVE',
+]);
+
+/** Suffix marking a verdict whose comparison could not be certified. */
+function uncertifiedSuffix(entry: CheckResultEntry): string {
+  if (entry.comparisonCertified !== false) return '';
+  return VERDICT_STATUSES.has(entry.status) ? ' · uncertified' : '';
+}
+
 /** Baseline freshness/environment banner rendered right under the header. */
 function baselineBanner(meta: BaselineMeta | undefined, aiUnavailable: boolean): string[] {
   const lines: string[] = [];
@@ -296,14 +348,14 @@ function baselineBanner(meta: BaselineMeta | undefined, aiUnavailable: boolean):
     );
   } else if (meta.harness?.state === 'unknown' && meta.harness.runRef && !meta.harness.baselineRef) {
     lines.push(
-      '> ⚠ Baseline records no PerfSense revision, so comparability with this run cannot be ' +
-        'established. Verdicts are still issued; re-capture the baseline to make them certifiable.',
+      '> ⚠ Baseline records no PerfSense revision, so it cannot be shown to have measured this ' +
+        'established. Verdicts below are uncertifiable - informational only, not findings.',
     );
   }
   if (meta.hasEnv === false) {
     lines.push(
-      '> ⚠ Baseline has no environment fingerprint (legacy v1). Improvement verdicts are ' +
-      'not certified until a v2 baseline is captured; regressions below are flagged normally.',
+      '> ⚠ Baseline has no environment fingerprint (legacy v1), so the verdicts below are ' +
+      'uncertifiable. Re-capture a v2 baseline on this runner to certify them.',
     );
   }
   if (meta.envMatched === false && meta.hasEnv) {
@@ -411,6 +463,15 @@ export function generatePRComment(
   // ── Performance Check (overall status + fixture summary) ─────────────
   lines.push('## Performance Check');
   lines.push('');
+  const reasons = uncertifiedReasons(result.baselineMeta);
+  if (reasons.length > 0) {
+    lines.push(
+      `> ⚠ **Every verdict in this report is uncertifiable**: ${reasons.join('; ')}. ` +
+        'The deltas are real measurements, but they cannot be attributed to this change ' +
+        'until a baseline captured with the current harness exists. Do not action them as findings.',
+    );
+    lines.push('');
+  }
   if (regressions.length > 0) {
     lines.push('🔴 Performance regression detected');
     lines.push('');

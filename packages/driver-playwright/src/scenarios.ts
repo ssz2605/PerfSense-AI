@@ -18,6 +18,8 @@ export const Scenario = {
   OpenProject: "openProject",
   PlayToCompletion: "playToCompletion",
   SaveExport: "saveExport",
+  Interact: "interact",
+  RepeatedRun: "repeatedRun",
 } as const;
 
 export type ScenarioName = (typeof Scenario)[keyof typeof Scenario];
@@ -26,6 +28,9 @@ export interface ScenarioOptions {
   fixtureName?: string;
   timeoutMs?: number;
   settleMs?: number;
+  panSteps?: number;
+  panSettleMs?: number;
+  repeatRuns?: number;
 }
 
 export const SCENARIOS: readonly ScenarioName[] = [
@@ -33,7 +38,17 @@ export const SCENARIOS: readonly ScenarioName[] = [
   Scenario.OpenProject,
   Scenario.PlayToCompletion,
   Scenario.SaveExport,
+  Scenario.Interact,
+  Scenario.RepeatedRun,
 ];
+
+/** Defaults for the interact / repeatedRun phases. */
+export const INTERACT_DEFAULTS = { panSteps: 24, panSettleMs: 120 };
+// 10 in-page runs, not 20. Each run is a full play-to-completion of the
+// fixture, so this is the dominant cost of the repeatedRun phase; 10 still
+// gives the least-squares retainedHeapSlope enough points to be meaningful
+// while halving the phase.
+export const REPEATED_RUN_DEFAULTS = { repeatRuns: 10 };
 
 const bootstrapSnippet = `
 (async function (__opt) {
@@ -175,41 +190,64 @@ const saveExportSnippet = `
     }
     return false;
   };
-  if (typeof ps.saveTime !== 'number') {
-    const hasUiSave = mb.ui && typeof mb.ui.save === 'function';
-    if (hasUiSave) {
-      const t0 = performance.now();
-      try { await mb.ui.save(); } catch (e) { void e; }
-      ps.saveTime = performance.now() - t0;
-    } else {
-      clickById(['saveTop', 'save', 'saveTopSave']);
-      ps.saveTime = null;
+  // PR #7970 traded ~20x peak memory for the export speedup, so the export
+  // phases sample the heap while they run. No forced GC here on purpose: gc()
+  // every 100ms would distort the very timings this phase is measuring. Peak
+  // detection does not need one -- --enable-precise-memory-info keeps
+  // usedJSHeapSize live between collections.
+  let peak = 0;
+  let sampling = true;
+  const sampler = setInterval(() => {
+    if (!sampling) return;
+    const v = typeof performance.memory === 'undefined' ? 0 : performance.memory.usedJSHeapSize;
+    if (typeof v === 'number' && v > peak) peak = v;
+  }, 100);
+  try {
+    if (typeof ps.saveTime !== 'number') {
+      const hasUiSave = mb.ui && typeof mb.ui.save === 'function';
+      if (hasUiSave) {
+        const t0 = performance.now();
+        try { await mb.ui.save(); } catch (e) { void e; }
+        ps.saveTime = performance.now() - t0;
+      } else {
+        clickById(['saveTop', 'save', 'saveTopSave']);
+        ps.saveTime = null;
+      }
     }
-  }
-  if (typeof ps.exportMIDITime !== 'number') {
-    const hasUiExport = mb.ui && typeof mb.ui.exportMIDI === 'function';
-    if (hasUiExport) {
-      const t0 = performance.now();
-      try { await mb.ui.exportMIDI(); } catch (e) { void e; }
-      ps.exportMIDITime = performance.now() - t0;
-    } else {
-      clickById(['exportMIDI', 'export', 'export-midi']);
-      ps.exportMIDITime = null;
+    if (typeof ps.exportMIDITime !== 'number') {
+      const hasUiExport = mb.ui && typeof mb.ui.exportMIDI === 'function';
+      if (hasUiExport) {
+        const t0 = performance.now();
+        try { await mb.ui.exportMIDI(); } catch (e) { void e; }
+        ps.exportMIDITime = performance.now() - t0;
+      } else {
+        clickById(['exportMIDI', 'export', 'export-midi']);
+        ps.exportMIDITime = null;
+      }
     }
-  }
-  if (typeof ps.saveAsLilypondTime !== 'number') {
-    const hasUiLilypond = mb.ui && typeof mb.ui.saveAsLilypond === 'function';
-    if (hasUiLilypond) {
-      const t0 = performance.now();
-      try { await mb.ui.saveAsLilypond(); } catch (e) { void e; }
-      ps.saveAsLilypondTime = performance.now() - t0;
-    } else {
-      clickById(['submitLilypond', 'saveLilypond']);
-      ps.saveAsLilypondTime = null;
+    if (typeof ps.saveAsLilypondTime !== 'number') {
+      const hasUiLilypond = mb.ui && typeof mb.ui.saveAsLilypond === 'function';
+      if (hasUiLilypond) {
+        const t0 = performance.now();
+        try { await mb.ui.saveAsLilypond(); } catch (e) { void e; }
+        ps.saveAsLilypondTime = performance.now() - t0;
+      } else {
+        clickById(['submitLilypond', 'saveLilypond']);
+        ps.saveAsLilypondTime = null;
+      }
     }
+  } finally {
+    sampling = false;
+    clearInterval(sampler);
   }
+  ps.peakHeapDuringExport = peak > 0 ? peak : null;
   void startMs; void timeoutMs;
-  return { saveTime: ps.saveTime, exportMIDITime: ps.exportMIDITime, saveAsLilypondTime: ps.saveAsLilypondTime };
+  return {
+    saveTime: ps.saveTime,
+    exportMIDITime: ps.exportMIDITime,
+    saveAsLilypondTime: ps.saveAsLilypondTime,
+    peakHeapDuringExport: ps.peakHeapDuringExport
+  };
 })
 `;
 
@@ -464,6 +502,43 @@ const playToCompletionSnippet = `
     const runEnd = performance.now();
     const memAfterSecond = mem();
 
+    // PR #7832 natural-completion probe.
+    //
+    // Cleanup is deferred behind _lastNoteTimeout (js/logo.js:2454-2465, a full
+    // second after the last note), so waitDone returns before it lands. Poll on
+    // the cleanup latch rather than a fixed sleep: _cleanupAfterCompletion sets
+    // _synthsInitialized = false (js/logo.js:1293) and clears every turtle's
+    // _transportEventId (js/logo.js:1285-1288). Timing out instead of waiting
+    // forever keeps a broken page from burning the run budget.
+    let cleanupSeen = false;
+    for (let i = 0; i < 60; i++) {
+      if (mb.logo && mb.logo._synthsInitialized === false) { cleanupSeen = true; break; }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // Reads as: the latch still set (1) plus every turtle still holding a
+    // transport handle. Healthy is 0 on both counts.
+    let transportHandles = 0;
+    try {
+      const list = mb.turtles && Array.isArray(mb.turtles.turtleList)
+        ? mb.turtles.turtleList
+        : [];
+      for (let i = 0; i < list.length; i++) {
+        if (list[i] && list[i]._transportEventId != null) transportHandles++;
+      }
+    } catch (e) {
+      void e;
+    }
+    ps.synthsRetained = mb.logo
+      ? (mb.logo._synthsInitialized === true ? 1 : 0) + transportHandles
+      : null;
+    // PR #7832: sounds must not survive a natural completion. logo.sounds is
+    // pushed by the play-sound block (js/blocks/MediaBlocks.js:554) and emptied
+    // by _cleanupAfterCompletion (js/logo.js:1248). Structurally 0 on any
+    // fixture whose program has no sound block, so it only carries signal where
+    // the contract approves it (RainbowConnection, via the export path).
+    ps.logoSoundsRetained = Array.isArray(mb.logo.sounds) ? mb.logo.sounds.length : null;
+    void cleanupSeen;
+
     ps.executionTime = runEnd - runStart;
     ps.maxQueueDepth = maxQ;
     ps.maxActionDepth = maxAction;
@@ -486,11 +561,382 @@ const playToCompletionSnippet = `
 })
 `;
 
+/**
+ * Exercises the render axis of a loaded workspace and records what it costs.
+ *
+ * Two phases, because the two performance PRs this covers are reached by
+ * different user actions:
+ *
+ *   A. Pan the workspace end to end with the app's own scroll keys
+ *      (END / PAGE_UP / PAGE_DOWN in js/activity/keyboard-controller.js:350-364).
+ *      This is what drives PR #7738: culling is only recomputed inside the render
+ *      loop when the blocks container has moved (js/activity.js:599-608), and
+ *      `stage.update()` (js/activity.js:610) is what gets cheaper once
+ *      off-screen blocks leave the display list.
+ *
+ *      Keyboard rather than a synthetic mouse drag, because the background pan
+ *      is gated on `stage.getObjectUnderPoint() === null`
+ *      (js/activity.js:1376) and a fully packed workspace has no empty
+ *      background to grab.
+ *
+ *   B. Highlight and unhighlight every block. This is what drives PR #7815:
+ *      those two methods hold the guarded `container.updateCache()` calls
+ *      (js/block.js:718-719 and :802-803), and panning alone dirties nothing, so
+ *      it rebuilds zero caches and measures nothing.
+ *
+ * The pan's frame window is opened immediately before the first key and closed
+ * after the last, so `stageUpdateTime` describes interaction frames only and
+ * never the idle frames around them. `panMovedPx` is recorded so a silent no-op
+ * (a guard that swallowed the key, a workspace that does not scroll) reads as
+ * "the interaction did not happen" rather than as "no regression".
+ */
+const interactSnippet = `
+(async function (__opt) {
+  const ps = (window).__perfsense = (window).__perfsense || {};
+  const mb = (window).__mb;
+  const steps = __opt.panSteps || 24;
+  const settleMs = __opt.panSettleMs || 120;
+  if (!mb || !mb.blocks || !mb.stage) return { error: 'no-bridge' };
+  const render = ps.render;
+  // The render collector latches in the metric plugin's setupPostNav. Without it
+  // there is nothing to time, and saying so beats reporting a silent 0.
+  if (!render) return { error: 'no-render-collector' };
+
+  const blockList = mb.blocks.blockList || {};
+
+  // Count container.updateCache() calls during the pan. Every block container is
+  // a createjs.Bitmap, so patching the prototype reached through one live
+  // container covers the whole workspace (PR #7815 removed these calls for
+  // off-screen blocks, so this count is the metric it regresses).
+  let cacheRebuilds = 0;
+  let cachePatched = false;
+  for (const key in blockList) {
+    const holder = blockList[key];
+    const c = holder && holder.container;
+    if (c && typeof c.updateCache === 'function') {
+      const proto = Object.getPrototypeOf(c);
+      if (proto && !proto.__perfsenseCachePatched && typeof proto.updateCache === 'function') {
+        const orig = proto.updateCache;
+        proto.updateCache = function () {
+          cacheRebuilds++;
+          return orig.apply(this, arguments);
+        };
+        proto.__perfsenseCachePatched = true;
+        cachePatched = true;
+      }
+      break;
+    }
+  }
+
+  // Direct #7738 observable: how many blocks culling currently hides. With
+  // _updateViewportCulling disabled this stays 0 for the whole pan, which is
+  // what separates "culling regressed" from "the pan never happened".
+  let maxCulled = 0;
+  let blockTotal = 0;
+  const sampleCulled = () => {
+    let n = 0;
+    let total = 0;
+    for (const key in blockList) {
+      const b = blockList[key];
+      if (!b) continue;
+      total++;
+      if (b._viewportVisible === false) n++;
+    }
+    blockTotal = total;
+    if (n > maxCulled) maxCulled = n;
+  };
+
+  const active = document.activeElement;
+  if (active && typeof active.blur === 'function') active.blur();
+
+  const press = (keyCode, keyName) => {
+    const ev = new KeyboardEvent('keydown', { key: keyName, bubbles: true, cancelable: true });
+    // keyCode is a legacy read-only property, so it has to be defined rather
+    // than passed to the constructor.
+    Object.defineProperty(ev, 'keyCode', { get: function () { return keyCode; } });
+    Object.defineProperty(ev, 'which', { get: function () { return keyCode; } });
+    document.dispatchEvent(ev);
+  };
+
+  const PAGE_UP = 33, PAGE_DOWN = 34, END = 35;
+  const container = mb.render && mb.render.blocksContainer ? mb.render.blocksContainer : null;
+  const kick = () => {
+    if (mb.render && typeof mb.render.refreshCanvas === 'function') mb.render.refreshCanvas();
+  };
+  const containerY = () => (container && typeof container.y === 'number' ? container.y : null);
+
+  // --- phase A: pan -------------------------------------------------------
+  // Jump to the bottom of the workspace first so the pan traverses the whole
+  // stack rather than starting wherever the load left the container.
+  press(END, 'End');
+  kick();
+  await new Promise((r) => setTimeout(r, settleMs));
+  sampleCulled();
+
+  const yBefore = containerY();
+  render.windowStart = performance.now();
+  let done = 0;
+  // Cumulative absolute travel, not net displacement. The pan alternates
+  // PAGE_DOWN / PAGE_UP by equal amounts, so it returns to where it started and
+  // a net delta would read 0 for a pan that scrolled the entire workspace.
+  // panMovedPx == 0 has to mean "nothing moved", which is what makes a silent
+  // no-op distinguishable from a real pan.
+  let travelPx = 0;
+  let maxExcursionPx = 0;
+  let prevY = yBefore;
+  for (let i = 0; i < steps; i++) {
+    press(i % 2 === 0 ? PAGE_DOWN : PAGE_UP, i % 2 === 0 ? 'PageDown' : 'PageUp');
+    // The scroll keys set stageDirty but do not restart the loop; a real mouse
+    // move calls refreshCanvas() to do both (js/activity.js:2154-2159). Mirror
+    // that, or the pan is a no-op whenever the loop has already gone idle.
+    kick();
+    done++;
+    await new Promise((r) => setTimeout(r, settleMs));
+    sampleCulled();
+    const y = containerY();
+    if (prevY !== null && y !== null) {
+      travelPx += Math.abs(y - prevY);
+      prevY = y;
+    }
+    if (yBefore !== null && y !== null) {
+      const exc = Math.abs(y - yBefore);
+      if (exc > maxExcursionPx) maxExcursionPx = exc;
+    }
+  }
+  render.windowEnd = performance.now();
+  const panMovedPx = containerY() === null ? null : Math.round(travelPx);
+
+  // --- phase B: highlight sweep -------------------------------------------
+  // PR #7815 guards container.updateCache() on _viewportVisible in
+  // Block.highlight() (js/block.js:718-719) and Block.unhighlight()
+  // (js/block.js:802-803). Panning alone never dirties a block, so it
+  // rebuilds zero caches and measures nothing; highlighting is what a drag does,
+  // and it is the only thing that reaches the guarded call. Sweeping every
+  // block makes the off-screen half of the workspace visible to the counter.
+  cacheRebuilds = 0;
+  let sweepCount = 0;
+  for (const key in blockList) {
+    const b = blockList[key];
+    if (!b || b.trash) continue;
+    try {
+      if (typeof b.highlight === 'function') b.highlight();
+      if (typeof b.unhighlight === 'function') b.unhighlight();
+      sweepCount++;
+    } catch (e) {
+      void e;
+    }
+  }
+  kick();
+  await new Promise((r) => setTimeout(r, settleMs));
+  sampleCulled();
+
+  render.cacheRebuildCount = cacheRebuilds;
+  render.viewportCulledBlocks = maxCulled;
+  render.panSteps = done;
+  render.panMovedPx = panMovedPx;
+  render.highlightSwept = sweepCount;
+
+  const inWindow = render.frames.filter(function (f) {
+    return Array.isArray(f) && f[0] >= render.windowStart && f[0] <= render.windowEnd;
+  });
+  return {
+    cacheRebuildCount: cacheRebuilds,
+    cachePatched: cachePatched,
+    viewportCulledBlocks: maxCulled,
+    blockTotal: blockTotal,
+    panSteps: done,
+    panMovedPx: panMovedPx,
+    maxExcursionPx: Math.round(maxExcursionPx),
+    highlightSwept: sweepCount,
+    frames: inWindow.length,
+    frameAvgMs: inWindow.length === 0
+      ? null
+      : inWindow.reduce(function (s, f) { return s + f[1]; }, 0) / inWindow.length
+  };
+})
+`;
+
+/**
+ * Runs the project N times inside one page load and records what survives a
+ * natural completion.
+ *
+ * PR #7848 claims that a natural completion preserves the drawing and disposes
+ * runtime state, so the invariants this measures are:
+ *   - canvasInkCoverage > 0  : the drawing is still on screen
+ *   - canvasInkDrift    ~ 0 : repeated runs do not accumulate ink
+ *   - retainedHeapSlope ~ 0 : repeated runs do not retain heap
+ *   - logoSoundsRetained   0 : sounds were disposed (PR #7832)
+ *   - stopListCallbacksRun>0 : stop-list callbacks fired (PR #7832)
+ *
+ * Two runs cannot show any of this, which is why the old playToCompletion
+ * double-run produced a memoryDelta/retainedHeap of exactly 0.
+ */
+const repeatedRunSnippet = `
+(async function (__opt) {
+  const ps = (window).__perfsense = (window).__perfsense || {};
+  const mb = (window).__mb;
+  const runs = __opt.repeatRuns || 10;
+  const timeoutMs = __opt.timeoutMs || 120000;
+  const perRunMs = Math.max(5000, Math.floor(timeoutMs / Math.max(1, runs)));
+  if (!mb || !mb.logo) return { error: 'no-bridge' };
+
+  const logo = mb.logo;
+
+  const gc = () => {
+    try { if (typeof window.gc === 'function') window.gc(); } catch (e) { void e; }
+  };
+  const heap = () => {
+    gc();
+    return typeof performance.memory === 'undefined' ? null : performance.memory.usedJSHeapSize;
+  };
+
+  // Ink coverage: fraction of sampled canvas pixels that differ from the modal
+  // (most common) colour. The modal colour is the background, so this reads as
+  // "how much is drawn" without hardcoding a palette colour.
+  const STRIDE = 4;
+  const inkOf = () => {
+    const canvas = document.getElementById('myCanvas');
+    if (!canvas || !canvas.width || !canvas.height) return null;
+    let ctx = null;
+    try { ctx = canvas.getContext('2d'); } catch (e) { return null; }
+    if (!ctx || typeof ctx.getImageData !== 'function') return null;
+    let data;
+    try {
+      data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    } catch (e) {
+      return null;
+    }
+    const counts = new Map();
+    let sampled = 0;
+    const pixels = [];
+    for (let i = 0; i < data.length; i += 4 * STRIDE) {
+      const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+      counts.set(key, (counts.get(key) || 0) + 1);
+      sampled++;
+      pixels.push(key);
+    }
+    if (sampled === 0) return null;
+    let modal = null;
+    let modalCount = -1;
+    counts.forEach(function (c, k) {
+      if (c > modalCount) { modalCount = c; modal = k; }
+    });
+    let ink = 0;
+    for (let i = 0; i < pixels.length; i++) if (pixels[i] !== modal) ink++;
+    return ink / sampled;
+  };
+
+  const isRunning = () => {
+    if (mb.runner && typeof mb.runner.isRunning === 'function' && mb.runner.isRunning()) return true;
+    if (mb.turtles && typeof mb.turtles.running === 'function' && mb.turtles.running()) return true;
+    if (logo && typeof logo.isRunning === 'function' && logo.isRunning()) return true;
+    if (mb.turtles) {
+      const list = Array.isArray(mb.turtles) ? mb.turtles
+        : Array.isArray(mb.turtles.turtleList) ? mb.turtles.turtleList
+        : Array.isArray(mb.turtles.turtles) ? mb.turtles.turtles : [];
+      for (let i = 0; i < list.length; i++) {
+        const t = list[i];
+        if (t && Array.isArray(t.queue) && t.queue.length > 0) return true;
+      }
+    }
+    return false;
+  };
+
+  const startRun = async () => {
+    await new Promise((r) => setTimeout(r, 50));
+    if (mb.runner && typeof mb.runner.start === 'function') { mb.runner.start(); return; }
+    const btn = document.getElementById('play');
+    if (btn) { btn.click(); return; }
+  };
+
+  const waitQuiet = async (budgetMs) => {
+    const t0 = Date.now();
+    let saw = false;
+    while (Date.now() - t0 < budgetMs) {
+      if (isRunning()) saw = true;
+      else if (saw) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return saw;
+  };
+
+  const inks = [];
+  const heaps = [];
+  let completed = 0;
+  for (let i = 0; i < runs; i++) {
+    if (!isRunning()) await startRun();
+    const ok = await waitQuiet(perRunMs);
+    if (!ok) break;
+    // The natural-completion cleanup is deferred behind a timer; give it room
+    // before sampling the post-run state.
+    await new Promise((r) => setTimeout(r, 600));
+    completed++;
+    inks.push(inkOf());
+    heaps.push(heap());
+    if (isRunning()) {
+      if (logo && typeof logo.doStopTurtles === 'function') logo.doStopTurtles();
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+
+  const cleanInks = inks.filter(function (v) { return typeof v === 'number'; });
+  const cleanHeaps = heaps.filter(function (v) { return typeof v === 'number'; });
+  const mean = (a) => a.length === 0 ? null : a.reduce(function (s, v) { return s + v; }, 0) / a.length;
+
+  ps.repeatRuns = completed;
+  ps.canvasInkCoverage = mean(cleanInks);
+  ps.canvasInkDrift = cleanInks.length < 2
+    ? null
+    : cleanInks[cleanInks.length - 1] - cleanInks[0];
+  // Least-squares slope of heap against run index, in bytes per run. A leak
+  // shows as a positive slope; a stable program as ~0.
+  // PR #7832: same floor as playToCompletion, sampled after the last run.
+  // The latch plus any turtle still holding a transport handle.
+  let transportHandles = 0;
+  try {
+    const list = mb.turtles && Array.isArray(mb.turtles.turtleList)
+      ? mb.turtles.turtleList
+      : [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] && list[i]._transportEventId != null) transportHandles++;
+    }
+  } catch (e) {
+    void e;
+  }
+  ps.synthsRetained = logo._synthsInitialized === true ? 1 + transportHandles : transportHandles;
+  ps.logoSoundsRetained = Array.isArray(logo.sounds) ? logo.sounds.length : null;
+
+  ps.retainedHeapSlope = cleanHeaps.length < 2 ? null : (function (a) {
+    const n = a.length;
+    const mx = (n - 1) / 2;
+    const my = a.reduce(function (s, v) { return s + v; }, 0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) { num += (i - mx) * (a[i] - my); den += (i - mx) * (i - mx); }
+    return den === 0 ? null : num / den;
+  })(cleanHeaps);
+
+  return {
+    repeatRuns: completed,
+    canvasInkCoverage: ps.canvasInkCoverage,
+    canvasInkDrift: ps.canvasInkDrift,
+    retainedHeapSlope: ps.retainedHeapSlope,
+    synthsRetained: ps.synthsRetained,
+    logoSoundsRetained: ps.logoSoundsRetained,
+    inkFirst: cleanInks.length ? cleanInks[0] : null,
+    inkLast: cleanInks.length ? cleanInks[cleanInks.length - 1] : null,
+    heapFirst: cleanHeaps.length ? cleanHeaps[0] : null,
+    heapLast: cleanHeaps.length ? cleanHeaps[cleanHeaps.length - 1] : null
+  };
+})
+`;
+
 const SCENARIO_SNIPPETS: Record<ScenarioName, string> = {
   [Scenario.Bootstrap]: bootstrapSnippet,
   [Scenario.OpenProject]: openProjectSnippet,
   [Scenario.PlayToCompletion]: playToCompletionSnippet,
   [Scenario.SaveExport]: saveExportSnippet,
+  [Scenario.Interact]: interactSnippet,
+  [Scenario.RepeatedRun]: repeatedRunSnippet,
 };
 
 async function callWithArg(

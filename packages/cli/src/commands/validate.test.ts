@@ -72,31 +72,41 @@ function healthyPages(): BaselineData['pages'] {
       callbackLatencyMax: stats([1.2, 1.21, 1.22, 1.23, 1.24]),
       cumulativeDrift: stats([1.5e-9, 1.51e-9, 1.52e-9, 1.53e-9, 1.54e-9]),
       voiceOnsetError: stats([0.48, 0.481, 0.482, 0.483, 0.49]),
-      scheduleCount: stats([268, 268, 268, 268, 268]),
-      executionTime: stats([4200, 4210, 4220, 4230, 4240]),
-      blocksExecuted: stats([228, 228, 228, 228, 228]),
-      maxQueueDepth: stats([6, 6, 6, 6, 6]),
     },
     'musical-tree.html': {
       maxQueueDepth: stats([22, 22, 22, 22, 22]),
       executionTime: stats([41000, 41100, 41200, 41300, 41400]),
       memoryDelta: stats([0, 0, 0, 0, 0]),
       retainedHeap: stats([0, 0, 0, 0, 0]),
-      maxLogicalDepth: stats([254, 254, 254, 254, 254]),
     },
     'ascending-notes-color-spiral.html': {
       executionTime: stats([2000, 2010, 2020, 2030, 2040]),
       blocksExecuted: stats([178, 178, 178, 178, 178]),
-      maxLogicalDepth: stats([27, 27, 27, 27, 27]),
     },
     'crabcanon-plot.html': {
       scheduleLagMean: stats([5.8e-12, 5.9e-12, 6e-12, 6.1e-12, 6.2e-12]),
       scheduleLagMax: stats([2.1e-11, 2.2e-11, 2.3e-11, 2.4e-11, 2.5e-11]),
-      executionTime: stats([24000, 24100, 24200, 24300, 24400]),
-      blocksExecuted: stats([2078, 2078, 2078, 2078, 2078]),
-      maxQueueDepth: stats([10, 10, 10, 10, 10]),
     },
   };
+}
+
+/**
+ * A capture that still carries the cells retired from the contract. `baseline
+ * save` filters these out, so this is the shape of a hand-edited or pre-retirement
+ * baseline — it must be reported, not silently accepted.
+ */
+function pagesWithRetiredCells(): ReturnType<typeof healthyPages> {
+  const pages = healthyPages() as Record<string, Record<string, unknown>>;
+  pages['Frere-Jacques.html'].scheduleCount = stats([268, 268, 268, 268, 268]);
+  pages['Frere-Jacques.html'].executionTime = stats([4200, 4210, 4220, 4230, 4240]);
+  pages['Frere-Jacques.html'].blocksExecuted = stats([228, 228, 228, 228, 228]);
+  pages['Frere-Jacques.html'].maxQueueDepth = stats([6, 6, 6, 6, 6]);
+  pages['musical-tree.html'].maxLogicalDepth = stats([254, 254, 254, 254, 254]);
+  pages['ascending-notes-color-spiral.html'].maxLogicalDepth = stats([27, 27, 27, 27, 27]);
+  pages['crabcanon-plot.html'].executionTime = stats([24000, 24100, 24200, 24300, 24400]);
+  pages['crabcanon-plot.html'].blocksExecuted = stats([2078, 2078, 2078, 2078, 2078]);
+  pages['crabcanon-plot.html'].maxQueueDepth = stats([10, 10, 10, 10, 10]);
+  return pages as ReturnType<typeof healthyPages>;
 }
 
 function kinds(validity: ReturnType<typeof validateBaseline>): string[] {
@@ -224,11 +234,25 @@ describe('validateBaseline', () => {
 
   it('flags an approved metric the capture never measured', () => {
     const pages = healthyPages();
-    delete pages['crabcanon-plot.html'].executionTime;
+    delete pages['musical-tree.html'].executionTime;
     const result = validateBaseline(baseline(pages));
     const missing = findDefect(result, 'executionTime', 'missing-metric');
     expect(missing?.severity).toBe('warn');
     expect(missing?.detail).toContain('NO_BASELINE');
+  });
+
+  it('flags every cell retired from the contract as an orphan', () => {
+    // The metrics are still collected, but a baseline carrying them is either
+    // hand-edited or pre-retirement. Either way they are never compared, and
+    // that must be visible rather than counted as coverage.
+    const result = validateBaseline(baseline(pagesWithRetiredCells()));
+    const orphans = result.defects.filter((d) => d.kind === 'orphan-cell');
+    expect(orphans.length).toBe(9);
+    for (const metric of ['scheduleCount', 'blocksExecuted', 'maxLogicalDepth']) {
+      expect(orphans.some((d) => d.metric === metric)).toBe(true);
+    }
+    // Reported, never blocking.
+    expect(result.ok).toBe(true);
   });
 
   it('flags a whole fixture the capture never ran', () => {
@@ -275,10 +299,10 @@ describe('validateBaseline', () => {
 
   describe('count-metric quantization floor', () => {
     it('does not fail a count metric whose limit is finer than one unit', () => {
-      // Real case: crabcanon maxQueueDepth median 8, p10 8 -> p90 10 is a
-      // one-unit rounding step, but a 20% limit reads it as 25% of noise.
+      // Real case: maxQueueDepth median 8, p10 8 -> p90 10 is a one-unit
+      // rounding step, but a 20% limit reads it as 25% of noise.
       const pages = healthyPages();
-      pages['crabcanon-plot.html'].maxQueueDepth = stats([8, 8, 8, 10, 10]);
+      pages['musical-tree.html'].maxQueueDepth = stats([8, 8, 8, 10, 10]);
       const result = validateBaseline(baseline(pages), {
         validity: { maxSpreadPct: { maxQueueDepth: 20 } },
       });
@@ -288,7 +312,7 @@ describe('validateBaseline', () => {
 
     it('still reports the misconfiguration when the spread is real', () => {
       const pages = healthyPages();
-      pages['crabcanon-plot.html'].maxQueueDepth = stats([2, 7, 8, 9, 15]);
+      pages['musical-tree.html'].maxQueueDepth = stats([2, 7, 8, 9, 15]);
       const result = validateBaseline(baseline(pages), {
         validity: { maxSpreadPct: { maxQueueDepth: 20 } },
       });
@@ -301,7 +325,7 @@ describe('validateBaseline', () => {
     it('gates a count metric normally once its limit clears the floor', () => {
       // Median 8 -> floor 25%, so a 40% limit is a genuine tolerance.
       const pages = healthyPages();
-      pages['crabcanon-plot.html'].maxQueueDepth = stats([4, 5, 6, 12, 14]);
+      pages['musical-tree.html'].maxQueueDepth = stats([4, 5, 6, 12, 14]);
       const result = validateBaseline(baseline(pages), {
         validity: { maxSpreadPct: { maxQueueDepth: 40 } },
       });
@@ -489,7 +513,7 @@ describe('defect kinds are exhaustive over what the gate can report', () => {
     pages['index.html'].initTotal = stats([200, 250, 255, 260, 265]);
     delete pages['ascending-notes-color-spiral.html'];
     pages['crabcanon-plot.html'].scheduleLagMean = stats([1e-13, 2e-13, 3e-13, 4e-13, 5e-13]);
-    pages['Frere-Jacques.html'].blocksExecuted = stats([228, 229, 230]);
+    pages['musical-tree.html'].maxQueueDepth = stats([228, 229, 230]);
     const b = baseline(pages);
     const result = validateBaseline(b, {
       previous: baseline(healthyPages()),

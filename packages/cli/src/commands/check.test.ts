@@ -30,10 +30,13 @@ describe('findDeadSeamPages (Layer A tripwire)', () => {
   const isAudioApproved = (page: string): boolean =>
     page === 'Frere-Jacques.html';
 
+  // The signal is transportEventRatio, not the retired scheduleCount: it counts
+  // both sides of the seam, so it stays meaningful at low absolute ratios and
+  // drops to 0 exactly when scheduling reverts to setTimeout.
   it('flags a page whose seam fired nothing and kept no audio observations', () => {
     const current = [
       pageResult('Frere-Jacques.html', {
-        scheduleCount: 0,
+        transportEventRatio: 0,
         callbackLatencyMean: null,
         callbackLatencyMax: null,
         cumulativeDrift: null,
@@ -46,18 +49,36 @@ describe('findDeadSeamPages (Layer A tripwire)', () => {
     expect(findings[0].check.alive).toBe(false);
   });
 
-  it('flags a page with no schedule events and no audio values at all', () => {
+  it('flags a page with no transport data and no audio values at all', () => {
     const current = [
-      pageResult('Frere-Jacques.html', { scheduleCount: null }),
+      pageResult('Frere-Jacques.html', { transportEventRatio: null }),
     ];
     const findings = findDeadSeamPages(current, isAudioApproved);
     expect(findings).toHaveLength(1);
+    expect(findings[0].check.transportEventRatio).toBeNull();
   });
 
-  it('does not flag a live seam (schedule events fired)', () => {
+  it('flags a live-looking ratio that has collapsed onto the setTimeout fallback', () => {
+    // Audio values are present, so the old audio-observation escape hatch would
+    // have passed this. A ratio below the floor must still fail.
     const current = [
       pageResult('Frere-Jacques.html', {
-        scheduleCount: 268,
+        transportEventRatio: 1e-9,
+        callbackLatencyMean: 12.4,
+        cumulativeDrift: 0.5,
+      }),
+    ];
+    const findings = findDeadSeamPages(current, isAudioApproved);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].check.alive).toBe(false);
+  });
+
+  it('does not flag a live seam (the observed Frere-Jacques ratio)', () => {
+    // 268 transport.schedule calls vs 10330 setTimeout delays: low, but the
+    // transport path is demonstrably in use.
+    const current = [
+      pageResult('Frere-Jacques.html', {
+        transportEventRatio: 0.0253,
         callbackLatencyMean: 12.4,
         callbackLatencyMax: 40.1,
         cumulativeDrift: 0.5,
@@ -67,7 +88,7 @@ describe('findDeadSeamPages (Layer A tripwire)', () => {
     expect(findDeadSeamPages(current, isAudioApproved)).toHaveLength(0);
   });
 
-  it('does not flag when audio observations exist even without a count', () => {
+  it('does not flag when audio observations exist but no ratio was collected', () => {
     const current = [
       pageResult('Frere-Jacques.html', {
         callbackLatencyMean: 12.4,
@@ -79,7 +100,7 @@ describe('findDeadSeamPages (Layer A tripwire)', () => {
 
   it('ignores pages whose fixture approves no audio metric', () => {
     const current = [
-      pageResult('musical-tree.html', { scheduleCount: 0 }),
+      pageResult('musical-tree.html', { transportEventRatio: 0 }),
       pageResult('index.html', { bootstrapTotal: 10 }),
     ];
     expect(findDeadSeamPages(current, isAudioApproved)).toHaveLength(0);

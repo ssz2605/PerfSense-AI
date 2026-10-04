@@ -95,9 +95,6 @@ describe('baseline save contract', () => {
     expect(Object.keys(baseline.pages['Frere-Jacques.html']).sort()).toEqual([
       'callbackLatencyMax',
       'callbackLatencyMean',
-      // Approved since the contract was widened: playToCompletion collects
-      // these for Frère too, so they belong in the baseline.
-      'executionTime',
     ]);
     expect(Object.keys(baseline.pages['crabcanon-plot.html']).sort()).toEqual([
       'scheduleLagMax',

@@ -105,14 +105,26 @@ export class BenchmarkDriver {
     // Headless Chromium blocks AudioContext autoplay by default, which stalls
     // Tone.js scheduling — and therefore the transport seam (latency / drift)
     // and real playback itself. Lift the gesture requirement so scheduled
-    // notes actually fire on benchmarked pages. --expose-gc exposes window.gc()
-    // so the memory probes can force collection before each heap read: without
-    // it, headless performance.memory never refreshes and memoryDelta /
-    // retainedHeap read 0 (noise, not signal).
+    // notes actually fire on benchmarked pages.
+    //
+    // --expose-gc exposes window.gc() so the memory probes can force a
+    // collection before each heap read. --enable-precise-memory-info is the
+    // OTHER half and is just as required: without it `performance.memory` is
+    // served from a coarse cache that Chromium only refreshes every ~20
+    // minutes, so usedJSHeapSize returns the SAME quantised number on every
+    // read and every heap delta is exactly 0. Measured on this driver:
+    //   --js-flags=--expose-gc only            -> 10.00MB before, 10.00MB
+    //                                               after allocating 320MB
+    //                                               (delta 0.00MB)
+    //   + --enable-precise-memory-info          -> 0.54MB before, 320.63MB
+    //                                               after (delta 320.09MB)
+    // So --expose-gc alone left memoryDelta / retainedHeap / heapAfterBoot
+    // structurally incapable of reporting a non-zero value. Both flags ship.
     const browser: Browser = await chromium.launch({
       args: [
         "--autoplay-policy=no-user-gesture-required",
         "--js-flags=--expose-gc",
+        "--enable-precise-memory-info",
       ],
     });
 
@@ -302,6 +314,9 @@ export class BenchmarkDriver {
                         : undefined,
                       // Honor the running budget; the per-run timeout stays in charge.
                       timeoutMs: runTimeout,
+                      panSteps: this.config.panSteps,
+                      panSettleMs: this.config.panSettleMs,
+                      repeatRuns: this.config.repeatRuns,
                     });
                     console.log(
                       `    ${phase} done in ${Date.now() - phaseStart}ms`,

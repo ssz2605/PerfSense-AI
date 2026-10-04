@@ -53,7 +53,9 @@ function makeBaseline(): BaselineData {
 describe('buildContract', () => {
   it('counts expected/collected/valid/compared and surfaces baseline holes', () => {
     const contract = buildContract(makeResults(), makeBaseline());
-    expect(contract.expected).toBe(28);
+    // Walks the matrix, so the count tracks the approved contract exactly:
+    // 3 bootstrap + 4 Rainbow + 4 Frère + 4 musical-tree + 2 spiral + 2 crabcanon.
+    expect(contract.expected).toBe(19);
     expect(contract.collected).toBeGreaterThanOrEqual(3);
     expect(contract.valid).toBeGreaterThanOrEqual(3);
     expect(contract.missing).toBeGreaterThan(0);

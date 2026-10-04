@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import type { BaselineData, BaselineMetricStatsV2, PageResult } from '@perfsense/core';
 import { run } from './report';
+import { computeEnvironmentFingerprint } from './env';
 
 function stats(values: number[]): BaselineMetricStatsV2 {
   const sorted = [...values].sort((a, b) => a - b);
@@ -45,8 +46,12 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** Baseline with one fixture whose metric moves hard enough to classify on its own. */
-function writeBaseline(harnessRef: string | null): string {
+/**
+ * Baseline with one fixture whose metric moves hard enough to classify on its own.
+ * `withEnv: false` (the default) reproduces a legacy v1 baseline: no environment
+ * fingerprint, so nothing about the comparison can be certified.
+ */
+function writeBaseline(harnessRef: string | null, opts: { withEnv?: boolean } = {}): string {
   const file = path.join(dir, 'baseline.json');
   const baseline: BaselineData = {
     schema: 'perfsense-baseline-v2',
@@ -68,6 +73,7 @@ function writeBaseline(harnessRef: string | null): string {
       },
     },
   };
+  if (opts.withEnv) baseline.env = computeEnvironmentFingerprint();
   fs.writeFileSync(file, JSON.stringify(baseline));
   return file;
 }
@@ -145,25 +151,38 @@ describe('report harness gate', () => {
     expect(report.correlation).toBeUndefined();
   });
 
-  it('issues verdicts when the baseline recorded no harness', async () => {
+  it('issues verdicts but marks them uncertifiable when the baseline recorded no harness', async () => {
     process.env.PERFSENSE_REF = 'bbbbbbb';
-    const report = await reportJson(writeBaseline(null), writeCurrent());
+    const report = await reportJson(writeBaseline(null, { withEnv: true }), writeCurrent());
     expect(report.check.baselineMeta.harness.state).toBe('unknown');
     const boot = report.check.results.find((r: any) => r.metric === 'bootstrapTotal');
+    // The regression itself is unchanged — classification is untouched — but it
+    // is no longer presented as a finding, because a comparison against a
+    // baseline with no recorded harness cannot be shown to measure the same thing.
     expect(boot.status).toBe('REGRESSION');
-    // The banner must say the limitation rather than block.
+    expect(boot.comparisonCertified).toBe(false);
+    expect(report.check.baselineMeta.comparisonCertified).toBe(false);
+    expect(report.check.baselineMeta.uncertifiableReasons.join(' ')).toContain('no PerfSense revision');
     expect(report.prComment).toContain('Baseline records no PerfSense revision');
+    expect(report.prComment).toContain('uncertified');
   });
 
-  it('issues verdicts outside the workflow, with a warning', async () => {
+  it('issues verdicts outside the workflow, but marks them uncertifiable', async () => {
     delete process.env.PERFSENSE_REF;
-    const report = await reportJson(writeBaseline('aaaaaaa'), writeCurrent());
+    const report = await reportJson(writeBaseline('aaaaaaa', { withEnv: true }), writeCurrent());
     expect(report.check.baselineMeta.harness.state).toBe('unknown');
     const boot = report.check.results.find((r: any) => r.metric === 'bootstrapTotal');
     expect(boot.status).toBe('REGRESSION');
-    // No warning: a local run simply has no provenance to compare against, and
-    // claiming the baseline is stale would be a different and wrong claim.
-    expect(report.prComment).not.toContain('PerfSense revision');
+    expect(boot.comparisonCertified).toBe(false);
+    // The baseline is not the stale side here — this run simply has no
+    // provenance to compare against — so the banner stays quiet while the
+    // reason is still stated explicitly rather than left implicit.
+    expect(report.prComment).not.toContain('Baseline records no PerfSense revision');
+    expect(report.check.baselineMeta.uncertifiableReasons.join(' ')).toContain(
+      'this run does not record a PerfSense revision',
+    );
+    expect(report.prComment).toContain('uncertifiable');
+    expect(report.prComment).toContain('· uncertified');
   });
 
   it('renders the mismatch banner in the comment', async () => {
@@ -175,5 +194,70 @@ describe('report harness gate', () => {
     await run(['--baseline', writeBaseline('aaaaaaa'), '--current', writeCurrent()]);
     expect(captured).toContain('different PerfSense revision');
     expect(captured).toContain('every verdict is withheld');
+  });
+});
+
+describe('baseline certification', () => {
+  it('certifies a matching fresh v2 baseline', async () => {
+    process.env.PERFSENSE_REF = 'aaaaaaa';
+    const report = await reportJson(writeBaseline('aaaaaaa', { withEnv: true }), writeCurrent());
+    const boot = report.check.results.find((r: any) => r.metric === 'bootstrapTotal');
+    expect(report.check.baselineMeta.harness.state).toBe('match');
+    expect(report.check.baselineMeta.hasEnv).toBe(true);
+    expect(report.check.baselineMeta.comparisonCertified).toBe(true);
+    expect(report.check.baselineMeta.uncertifiableReasons).toEqual([]);
+    expect(boot.comparisonCertified).toBe(true);
+    // A certified regression still reads as a regression, with no hedging.
+    expect(boot.status).toBe('REGRESSION');
+    expect(report.prComment).not.toContain('uncertified');
+    expect(report.prComment).not.toContain('uncertifiable');
+  });
+
+  it('refuses certification when the harness differs', async () => {
+    process.env.PERFSENSE_REF = 'bbbbbbb';
+    const report = await reportJson(writeBaseline('aaaaaaa', { withEnv: true }), writeCurrent());
+    expect(report.check.baselineMeta.comparisonCertified).toBe(false);
+    expect(report.check.baselineMeta.uncertifiableReasons.join(' ')).toContain('bbbbbbb');
+  });
+
+  it('refuses certification when the baseline carries no environment fingerprint', async () => {
+    process.env.PERFSENSE_REF = 'aaaaaaa';
+    const report = await reportJson(writeBaseline('aaaaaaa'), writeCurrent());
+    expect(report.check.baselineMeta.hasEnv).toBe(false);
+    expect(report.check.baselineMeta.comparisonCertified).toBe(false);
+    expect(report.check.baselineMeta.uncertifiableReasons.join(' ')).toContain('environment fingerprint');
+    expect(report.prComment).toContain('legacy v1');
+    expect(report.prComment).toContain('uncertified');
+  });
+
+  it('refuses certification for a legacy baseline missing both provenance fields', async () => {
+    process.env.PERFSENSE_REF = 'aaaaaaa';
+    // Strip harness and env entirely: the shape a pre-provenance baseline has.
+    const file = writeBaseline('aaaaaaa');
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    delete raw.harness;
+    delete raw.env;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const report = await reportJson(file, writeCurrent());
+    expect(report.check.baselineMeta.comparisonCertified).toBe(false);
+    expect(report.check.baselineMeta.uncertifiableReasons).toHaveLength(2);
+    expect(report.prComment).toContain('Every verdict in this report is uncertifiable');
+  });
+
+  it('does not change classification — only the certification label', async () => {
+    // Same harness on both sides, so the hard mismatch withhold never fires; the
+    // only difference is the baseline's missing environment fingerprint.
+    process.env.PERFSENSE_REF = 'aaaaaaa';
+    const certified = await reportJson(writeBaseline('aaaaaaa', { withEnv: true }), writeCurrent());
+    const uncertified = await reportJson(writeBaseline('aaaaaaa'), writeCurrent());
+    expect(certified.check.baselineMeta.comparisonCertified).toBe(true);
+    expect(uncertified.check.baselineMeta.comparisonCertified).toBe(false);
+    const pick = (r: any) =>
+      Object.fromEntries(
+        r.check.results.map((x: any) => [x.metric, [x.status, x.pValue, x.effectSize, x.deltaPercent]]),
+      );
+    // Same numbers, same verdicts: the certification gate adds a label, it does
+    // not reclassify anything.
+    expect(pick(uncertified)).toEqual(pick(certified));
   });
 });

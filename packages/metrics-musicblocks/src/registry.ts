@@ -24,6 +24,17 @@ import { ScheduleLagMean } from './scheduleLagMean';
 import { ScheduleLagMax } from './scheduleLagMax';
 import { ScheduleCount } from './scheduleCount';
 import { MaxLogicalDepth } from './maxLogicalDepth';
+import { StageUpdateMax } from './stageUpdateMax';
+import { StageUpdateCallCount } from './stageUpdateCallCount';
+import { CacheRebuildCount } from './cacheRebuildCount';
+import { ViewportCulledBlocks } from './viewportCulledBlocks';
+import { TransportEventRatio } from './transportEventRatio';
+import { SynthsRetained } from './synthsRetained';
+import { LogoSoundsRetained } from './logoSoundsRetained';
+import { CanvasInkCoverage } from './canvasInkCoverage';
+import { CanvasInkDrift } from './canvasInkDrift';
+import { RetainedHeapSlope } from './retainedHeapSlope';
+import { PeakHeapDuringExport } from './peakHeapDuringExport';
 
 /**
  * Every music-blocks seam metric, keyed by lowercase name so lookups are
@@ -55,5 +66,16 @@ export const MUSICBLOCKS_PLUGIN_REGISTRY: Record<string, new () => MetricPlugin>
   schedulelagmean: ScheduleLagMean,
   schedulelagmax: ScheduleLagMax,
   schedulecount: ScheduleCount,
-  maxlogicaldepth: MaxLogicalDepth
+  maxlogicaldepth: MaxLogicalDepth,
+  stageupdatemax: StageUpdateMax,
+  stageupdatecallcount: StageUpdateCallCount,
+  cacherebuildcount: CacheRebuildCount,
+  viewportculledblocks: ViewportCulledBlocks,
+  transporteventratio: TransportEventRatio,
+  synthsretained: SynthsRetained,
+  logosoundsretained: LogoSoundsRetained,
+  canvasinkcoverage: CanvasInkCoverage,
+  canvasinkdrift: CanvasInkDrift,
+  retainedheapslope: RetainedHeapSlope,
+  peakheapduringexport: PeakHeapDuringExport
 };

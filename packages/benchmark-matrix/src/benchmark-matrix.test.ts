@@ -34,20 +34,25 @@ describe('Benchmark Matrix contract', () => {
       'callbackLatencyMax',
       'cumulativeDrift',
       'voiceOnsetError',
-      'scheduleCount',
-      'executionTime',
-      'blocksExecuted',
-      'maxQueueDepth',
     ]);
-    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap', 'maxLogicalDepth']);
-    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'blocksExecuted', 'maxLogicalDepth']);
-    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual([
-      'scheduleLagMean',
-      'scheduleLagMax',
-      'executionTime',
-      'blocksExecuted',
-      'maxQueueDepth',
-    ]);
+    expect(getApprovedMetrics('musical-tree.html')).toEqual(['maxQueueDepth', 'executionTime', 'memoryDelta', 'retainedHeap']);
+    expect(getApprovedMetrics('ascending-notes-color-spiral.html')).toEqual(['executionTime', 'blocksExecuted']);
+    expect(getApprovedMetrics('crabcanon-plot.html')).toEqual(['scheduleLagMean', 'scheduleLagMax']);
+  });
+
+  it('keeps the retired interpreter/recursion counters out of the contract', () => {
+    // These are still collected, but they cannot serve as regression references:
+    // blocksExecuted is bit-identical across runs of unchanged code, and
+    // maxQueueDepth swings 21-25 while it stays that way. They must not appear
+    // as expected cells, or the report asks for baselines it cannot use.
+    for (const fixture of ['Frere-Jacques.html', 'crabcanon-plot.html']) {
+      expect(isMetricApproved(fixture, 'maxQueueDepth')).toBe(false);
+      expect(isMetricApproved(fixture, 'executionTime')).toBe(false);
+      expect(isMetricApproved(fixture, 'blocksExecuted')).toBe(false);
+    }
+    expect(isMetricApproved('Frere-Jacques.html', 'scheduleCount')).toBe(false);
+    expect(isMetricApproved('musical-tree.html', 'maxLogicalDepth')).toBe(false);
+    expect(isMetricApproved('ascending-notes-color-spiral.html', 'maxLogicalDepth')).toBe(false);
   });
 
   it('rejects metrics that are not part of the matrix for a fixture', () => {
