@@ -74,40 +74,34 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // refreshCanvasCallCount is the direct read on PR #7923: with
     // _suppressRefresh set, refreshCanvas() returns early during decode and
     // the load repaints almost nothing. Best-guess timing (projectLoadTime)
-    // only sees the side effect. stageUpdateCallCount corroborates it from
-    // the other side: the EaselJS update that the early-returned
-    // refreshCanvas would have queued simply never runs. Note it counts
-    // frames for the WHOLE page after openStart, not just the load.
+    // only sees the side effect.
     // peakHeapDuringExport covers the memory half of PR #7970, which bought a
     // ~23x export speedup with a documented ~1.3 MB -> ~27 MB peak and had no
     // cell watching it. maxDepth is back for the same PR: the fast-run path
     // raises execution depth 1 -> 100, and driver.ts filters unapproved metrics
     // at the collection boundary, so it was not being measured at all.
+    //
+    // Removed (2026-10): exportMIDITime, saveAsLilypondTime, stageUpdateCallCount,
+    // stageUpdateTime, stageUpdateMax, cacheRebuildCount, viewportCulledBlocks.
+    // None of them is a witness for any merged perf PR on this fixture, and a
+    // cell that only ever reports NO_BASELINE or a warn-only delta is a row a
+    // reviewer learns to skip. The two that stay are the ones whose value
+    // CHANGES when the optimized path is reverted.
     metrics: [
       "projectLoadTime",
       "saveTime",
-      "exportMIDITime",
-      "saveAsLilypondTime",
-      "stageUpdateCallCount",
       "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
-      "stageUpdateTime",
-      "stageUpdateMax",
-      "cacheRebuildCount",
-      "viewportCulledBlocks",
     ],
     unverified: [],
     // #7923 + #7970's witnesses, exact: the healthy build records
     // deterministic values for both, and reverting either PR moves its cell.
     exactMetrics: ["refreshCanvasCallCount", "maxDepth"],
     requiredMetrics: ["refreshCanvasCallCount", "maxDepth"],
-    warnOnly: [
-      "stageUpdateTime",
-      "stageUpdateMax",
-      "cacheRebuildCount",
-      "viewportCulledBlocks",
-    ],
+    // Nothing on this fixture is warn-only any more: every remaining cell is
+    // either an exact fingerprint or a timing metric with a real threshold.
+    warnOnly: [],
   },
   {
     fixture: "Frere-Jacques.html",
@@ -122,12 +116,11 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // transportEventRatio / transportEventCount / synthsRetained are event
     // counts, not costs, and they are the only audio-family cells that work on
     // a synthesised clock: neither depends on how accurate the clock is.
-    // cumulativeDrift collapses to ~1e-9 ms headless and cannot see a
-    // regression at all.
+    // cumulativeDrift is removed from the contract (2026-10): it collapses to
+    // ~1e-9 ms headless and cannot see a regression in either direction.
     metrics: [
       "callbackLatencyMean",
       "callbackLatencyMax",
-      "cumulativeDrift",
       "voiceOnsetError",
       "transportEventRatio",
       "transportEventCount",
@@ -160,7 +153,6 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     warnOnly: [
       "callbackLatencyMean",
       "callbackLatencyMax",
-      "cumulativeDrift",
       "voiceOnsetError",
     ],
   },
@@ -169,20 +161,22 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     displayName: "musical-tree",
     // maxLogicalDepth was dropped from the contract for the same reason as
     // Frère's interpreter counters: it never produced a usable baseline cell.
+    //
     // The repeated-run cells are PR #7848's invariants: a natural completion
-    // preserves the drawing (canvasInkCoverage > 0), N completions do not
-    // accumulate ink (canvasInkDrift ~ 0) and do not retain heap
-    // (retainedHeapSlope ~ 0). memoryDelta/retainedHeap are the old two-run
-    // endpoint probes; they read exactly 0 without --enable-precise-memory-info
-    // and stay for continuity only.
+    // preserves the drawing (canvasInkCoverage > 0) and N completions do not
+    // accumulate ink (canvasInkDrift ~ 0).
+    //
+    // Removed (2026-10): memoryDelta, retainedHeap, retainedHeapSlope.
+    // memoryDelta/retainedHeap are the old two-run endpoint probes and read
+    // exactly 0 without --enable-precise-memory-info; retainedHeapSlope is a
+    // heap measurement whose CI spread is not characterized, so it could only
+    // ever warn. #7848 keeps its two canvas invariants, which are the ones a
+    // re-wired cleanup actually moves.
     metrics: [
       "maxQueueDepth",
       "executionTime",
-      "memoryDelta",
-      "retainedHeap",
       "canvasInkCoverage",
       "canvasInkDrift",
-      "retainedHeapSlope",
       "synthsRetained",
     ],
     // #7848's invariants as exact fingerprints: inkCoverage ~constant and
@@ -200,9 +194,9 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "canvasInkDrift",
       "synthsRetained",
     ],
-    // Memory stays warn-only (real values now, but CI-heap noise is hard to
-    // characterize): it can warn but never post a hard REGRESSION.
-    warnOnly: ["memoryDelta", "retainedHeap", "retainedHeapSlope"],
+    // Memory is gone from this fixture entirely, so there is nothing left to
+    // cap: the two remaining timing metrics carry real thresholds.
+    warnOnly: [],
   },
   {
     fixture: "ascending-notes-color-spiral.html",
@@ -225,15 +219,19 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // contract drops them; driver.ts still collects them (they are requested in
     // perfsense.config.json) so the continuity read survives in the raw results.
     //
-    // The render cells are PR #7738's coverage. This is the fixture the
-    // optimisation was measured on (stage.update 4.807 ms -> 1.972 ms) and the
-    // config previously had no render metric whatsoever, so the change was
-    // unobservable in both directions. viewportCulledBlocks is the direct
-    // state read; stageUpdateTime/Max are the cost it buys; cacheRebuildCount
-    // is PR #7815's cost.
+    // The render cells are PR #7738's coverage and PR #7815's cost.
+    // viewportCulledBlocks / viewportCulledFraction are the direct state read
+    // of the culler; cacheRebuildCount / cacheSkippedCount are the direct read
+    // of the off-screen updateCache guard.
+    //
+    // Removed (2026-10): stageUpdateTime, stageUpdateMax. They are the cost
+    // side of #7738 (stage.update 4.807 ms -> 1.972 ms), but their observed
+    // CI spread is exactly what failed baseline validate: a per-frame duration
+    // distribution on a loaded runner is bimodal, and a bimodal sample is a
+    // hard fail rather than a warning. Losing them costs the "is the win still
+    // there in milliseconds" reading; the four counters below still fail loudly
+    // when the same code is reverted.
     metrics: [
-      "stageUpdateTime",
-      "stageUpdateMax",
       "cacheRebuildCount",
       "cacheSkippedCount",
       "viewportCulledBlocks",
@@ -260,7 +258,7 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "viewportCulledBlocks",
       "viewportCulledFraction",
     ],
-    warnOnly: ["stageUpdateTime", "stageUpdateMax", "transportEventRatio"],
+    warnOnly: ["transportEventRatio"],
   },
 ];
 

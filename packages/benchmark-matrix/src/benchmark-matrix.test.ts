@@ -43,40 +43,32 @@ describe("Benchmark Matrix contract", () => {
       "initTotal",
       "heapAfterBoot",
     ]);
+    // Rainbow keeps only the cells that move when a merged perf PR is reverted
+    // (refreshCanvasCallCount for #7923, maxDepth for #7970) plus the two load
+    // timings. The export timings and the stage/cache counters are gone.
     expect(getApprovedMetrics("RainbowConnection.html")).toEqual([
       "projectLoadTime",
       "saveTime",
-      "exportMIDITime",
-      "saveAsLilypondTime",
-      "stageUpdateCallCount",
       "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
-      "stageUpdateTime",
-      "stageUpdateMax",
-      "cacheRebuildCount",
-      "viewportCulledBlocks",
     ]);
     // transportEventRatio and synthsRetained are the two audio-family cells that
     // survive a synthesised clock, because both are counts rather than timings.
     expect(getApprovedMetrics("Frere-Jacques.html")).toEqual([
       "callbackLatencyMean",
       "callbackLatencyMax",
-      "cumulativeDrift",
       "voiceOnsetError",
       "transportEventRatio",
       "transportEventCount",
       "synthsRetained",
     ]);
-    // The repeatedRun cells are PR #7848's invariants.
+    // The repeatedRun cells are PR #7848's invariants. The heap probes are gone.
     expect(getApprovedMetrics("musical-tree.html")).toEqual([
       "maxQueueDepth",
       "executionTime",
-      "memoryDelta",
-      "retainedHeap",
       "canvasInkCoverage",
       "canvasInkDrift",
-      "retainedHeapSlope",
       "synthsRetained",
     ]);
     expect(getApprovedMetrics("ascending-notes-color-spiral.html")).toEqual([
@@ -84,16 +76,74 @@ describe("Benchmark Matrix contract", () => {
       "blocksExecuted",
     ]);
     // scheduleLagMean/scheduleLagMax were removed: at ~1e-11 ms they are
-    // constant on unchanged code. The render cells replaced them (#7738/#7815).
+    // constant on unchanged code. stageUpdateTime/stageUpdateMax were removed
+    // next: their per-frame distributions are what fails baseline validate.
     expect(getApprovedMetrics("crabcanon-plot.html")).toEqual([
-      "stageUpdateTime",
-      "stageUpdateMax",
       "cacheRebuildCount",
       "cacheSkippedCount",
       "viewportCulledBlocks",
       "viewportCulledFraction",
       "transportEventRatio",
     ]);
+  });
+
+  it("keeps the cell count per fixture explicit and bounded", () => {
+    // Every cell here is a row a reviewer is expected to read. The counts are
+    // pinned so an accidental re-add of a retired metric is a test failure
+    // rather than a slower report.
+    const counts: Record<string, number> = {};
+    for (const contract of BENCHMARK_MATRIX) {
+      counts[contract.fixture] = contract.metrics.length;
+    }
+    expect(counts).toEqual({
+      "index.html": 3,
+      "RainbowConnection.html": 5,
+      "Frere-Jacques.html": 6,
+      "musical-tree.html": 5,
+      "ascending-notes-color-spiral.html": 2,
+      "crabcanon-plot.html": 5,
+    });
+    // 26 cells total, down from 39 before the 2026-10 cleanup.
+    const total = BENCHMARK_MATRIX.reduce(
+      (sum, c) => sum + c.metrics.length,
+      0,
+    );
+    expect(total).toBe(26);
+    // bootstrapTotal survives: it is the one cell that measures the repo rather
+    // than a single PR, and it is the fixture that proves the harness is honest.
+    expect(isMetricApproved("index.html", "bootstrapTotal")).toBe(true);
+  });
+
+  it("retires the cleanup's metrics everywhere except their real owner", () => {
+    // Each of these was removed for being unmeasurable, unexercised or too noisy
+    // to gate on. cacheRebuildCount and viewportCulledBlocks stay on
+    // crabcanon-plot, which is the fixture those two PRs were measured on: they
+    // are its fingerprints, and Rainbow only ever borrowed them.
+    const retired: Record<string, string[]> = {
+      exportMIDITime: [],
+      saveAsLilypondTime: [],
+      stageUpdateCallCount: [],
+      stageUpdateTime: [],
+      stageUpdateMax: [],
+      cacheRebuildCount: ["crabcanon-plot.html"],
+      viewportCulledBlocks: ["crabcanon-plot.html"],
+      memoryDelta: [],
+      retainedHeap: [],
+      retainedHeapSlope: [],
+      cumulativeDrift: [],
+    };
+    for (const [metric, owners] of Object.entries(retired)) {
+      const approved = BENCHMARK_MATRIX.filter((c) =>
+        isMetricApproved(c.fixture, metric),
+      ).map((c) => c.fixture);
+      expect(approved).toEqual(owners);
+      for (const contract of BENCHMARK_MATRIX) {
+        // A metric that is not approved for a fixture is never warn-only for it
+        // either, so a retired name cannot survive in a warnOnly list.
+        if (owners.includes(contract.fixture)) continue;
+        expect(isMetricWarnOnly(contract.fixture, metric)).toBe(false);
+      }
+    }
   });
 
   it("keeps the retired interpreter/recursion counters out of the contract", () => {
@@ -165,9 +215,12 @@ describe("Benchmark Matrix contract", () => {
     expect(isMetricApproved("rainbowconnection.html", "EXPORTMITITIME")).toBe(
       false,
     );
-    expect(isMetricApproved("rainbowconnection.html", "exportMIDITime")).toBe(
-      true,
+    expect(isMetricApproved("rainbowconnection.html", "SAVEASLILYPONDTIME")).toBe(
+      false,
     );
+    expect(
+      isMetricApproved("rainbowconnection.html", "PEAKHEAPDURINGEXPORT"),
+    ).toBe(true);
     expect(getFixtureContract("RAINBOWCONNECTION.HTML")?.displayName).toBe(
       "Rainbow Connection",
     );
@@ -201,13 +254,19 @@ describe("Benchmark Matrix contract", () => {
       true,
     );
     expect(isMetricWarnOnly("Frere-Jacques.html", "cumulativeDrift")).toBe(
-      true,
+      false,
     );
     expect(isMetricWarnOnly("Frere-Jacques.html", "voiceOnsetError")).toBe(
       true,
     );
-    expect(isMetricWarnOnly("musical-tree.html", "memoryDelta")).toBe(true);
-    expect(isMetricWarnOnly("musical-tree.html", "retainedHeap")).toBe(true);
+    // musical-tree has no warn-only cell left: its heap probes were retired and
+    // the two surviving timings carry real thresholds.
+    expect(isMetricWarnOnly("musical-tree.html", "memoryDelta")).toBe(false);
+    expect(isMetricWarnOnly("musical-tree.html", "retainedHeap")).toBe(false);
+    expect(isMetricWarnOnly("musical-tree.html", "retainedHeapSlope")).toBe(
+      false,
+    );
+    expect(isMetricWarnOnly("musical-tree.html", "executionTime")).toBe(false);
     // Frère Jacques owns a verified count metric: scheduleCount is analyzed but
     // guarded by the seam tripwire, so it is not capped at warning.
     expect(isMetricWarnOnly("Frere-Jacques.html", "scheduleCount")).toBe(false);
@@ -253,7 +312,7 @@ describe("Benchmark Matrix contract", () => {
       false,
     );
     expect(isMetricWarnOnly("crabcanon-plot.html", "stageUpdateTime")).toBe(
-      true,
+      false,
     );
     // The crab canon render/cull cells are exact fingerprints now: a revert
     // of #7738/#7815 must read as CHANGED, not as a capped warning.
