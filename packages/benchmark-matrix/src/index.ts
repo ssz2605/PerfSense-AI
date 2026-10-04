@@ -145,6 +145,10 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "transportEventCount",
       "synthsRetained",
     ],
+    // The ratio is derived from two counters and is serialized as a float.
+    // This epsilon accepts insignificant representation noise, not a change
+    // to the ~0.0253 transport share.
+    exactTolerance: { transportEventRatio: 0.0001 },
     // Required: these cells exist to prove the seam is still wired, so a null
     // reading is a broken collector, not an unchanged build.
     requiredMetrics: ["transportEventRatio", "transportEventCount"],
@@ -185,6 +189,17 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // inkDrift ~0 on a healthy build, and both collapse to 0 / grow when
     // cleanup is re-wired to clear the drawing.
     exactMetrics: ["canvasInkCoverage", "canvasInkDrift", "synthsRetained"],
+    // Canvas coverage/drift are pixel-derived floating point measurements.
+    // Counters retain the default exact (zero) tolerance.
+    exactTolerance: {
+      canvasInkCoverage: 0.0001,
+      canvasInkDrift: 0.000001,
+    },
+    requiredMetrics: [
+      "canvasInkCoverage",
+      "canvasInkDrift",
+      "synthsRetained",
+    ],
     // Memory stays warn-only (real values now, but CI-heap noise is hard to
     // characterize): it can warn but never post a hard REGRESSION.
     warnOnly: ["memoryDelta", "retainedHeap", "retainedHeapSlope"],
@@ -236,6 +251,9 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "viewportCulledBlocks",
       "viewportCulledFraction",
     ],
+    // Fraction is maxCulled/blockTotal and therefore subject only to float
+    // representation noise; all count fingerprints remain bit-identical.
+    exactTolerance: { viewportCulledFraction: 0.0001 },
     requiredMetrics: [
       "cacheRebuildCount",
       "cacheSkippedCount",

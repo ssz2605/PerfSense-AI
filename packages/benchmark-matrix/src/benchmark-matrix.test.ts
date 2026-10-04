@@ -7,12 +7,21 @@ import {
   isMetricApproved,
   isMetricUnverified,
   isMetricWarnOnly,
+  getExactTolerance,
   formatFixtureName,
   formatMetricValue,
   formatDeltaPercent,
 } from "./index";
 
 describe("Benchmark Matrix contract", () => {
+  it("uses explicit epsilon only for float fingerprints", () => {
+    expect(getExactTolerance("Frere-Jacques.html", "transportEventRatio")).toBe(0.0001);
+    expect(getExactTolerance("musical-tree.html", "canvasInkCoverage")).toBe(0.0001);
+    expect(getExactTolerance("musical-tree.html", "canvasInkDrift")).toBe(0.000001);
+    expect(getExactTolerance("crabcanon-plot.html", "viewportCulledFraction")).toBe(0.0001);
+    expect(getExactTolerance("Frere-Jacques.html", "transportEventCount")).toBe(0);
+    expect(getExactTolerance("RainbowConnection.html", "maxDepth")).toBe(0);
+  });
   it("covers every approved fixture exactly once", () => {
     const fixtures = BENCHMARK_MATRIX.map((c) => c.fixture);
     expect(fixtures).toEqual([

@@ -91,19 +91,112 @@ function writeBaseline(
   return file;
 }
 
-/** Current results that would post a bootstrapTotal regression on their own merits. */
-function writeCurrent(): string {
-  const file = path.join(dir, "current.json");
-  const values = [7000, 7100, 7200, 7300, 7400];
-  const current: PageResult[] = [
+/**
+ * Build current results that satisfy all required fingerprint metrics for all
+ * 4 required fixtures. Share this helper so every test gets a "clean" run
+ * (no REQUIRED MISSING failures) unless it deliberately removes something.
+ */
+function buildCompleteCurrentResults(): PageResult[] {
+  return [
     {
       page: "index.html",
-      runs: values.map((v, i) => ({
+      runs: [0, 1, 2, 3, 4].map((i) => ({
         run: i + 1,
-        metrics: { bootstrapTotal: v, initTotal: 400, heapAfterBoot: 48e6 },
+        metrics: {
+          bootstrapTotal: 7000 + i * 100,
+          initTotal: 400,
+          heapAfterBoot: 48e6,
+        },
+      })),
+    },
+    // Frere-Jacques: requiredMetrics = [transportEventRatio, transportEventCount]
+    {
+      page: "Frere-Jacques.html",
+      runs: [0, 1, 2, 3, 4].map((i) => ({
+        run: i + 1,
+        metrics: {
+          transportEventRatio: 0.0253,
+          transportEventCount: 268,
+          callbackLatencyMean: 0.48,
+          callbackLatencyMax: 1.2,
+          cumulativeDrift: 0.001,
+          voiceOnsetError: 0.5,
+          synthsRetained: 0,
+        },
+      })),
+    },
+    // RainbowConnection: requiredMetrics = [refreshCanvasCallCount, maxDepth]
+    {
+      page: "RainbowConnection.html",
+      runs: [0, 1, 2, 3, 4].map((i) => ({
+        run: i + 1,
+        metrics: {
+          projectLoadTime: 9000,
+          saveTime: 28,
+          exportMIDITime: 150,
+          saveAsLilypondTime: 200,
+          stageUpdateCallCount: 12,
+          refreshCanvasCallCount: 11,
+          peakHeapDuringExport: 27e6,
+          maxDepth: 100,
+          stageUpdateTime: 8.5,
+          stageUpdateMax: 20.1,
+          cacheRebuildCount: 244,
+          viewportCulledBlocks: 796,
+        },
+      })),
+    },
+    // musical-tree: requiredMetrics = [canvasInkCoverage, canvasInkDrift, synthsRetained]
+    {
+      page: "musical-tree.html",
+      runs: [0, 1, 2, 3, 4].map((i) => ({
+        run: i + 1,
+        metrics: {
+          maxQueueDepth: 12,
+          executionTime: 4500,
+          memoryDelta: 1e6,
+          retainedHeap: 2e6,
+          canvasInkCoverage: 0.15,
+          canvasInkDrift: 0,
+          retainedHeapSlope: 1e5,
+          synthsRetained: 0,
+        },
+      })),
+    },
+    // crabcanon-plot: requiredMetrics = [cacheRebuildCount, cacheSkippedCount, viewportCulledBlocks, viewportCulledFraction]
+    {
+      page: "crabcanon-plot.html",
+      runs: [0, 1, 2, 3, 4].map((i) => ({
+        run: i + 1,
+        metrics: {
+          stageUpdateTime: 8.5,
+          stageUpdateMax: 20.1,
+          cacheRebuildCount: 244,
+          cacheSkippedCount: 687,
+          viewportCulledBlocks: 796,
+          viewportCulledFraction: 0.855,
+          transportEventRatio: 0.0253,
+        },
+      })),
+    },
+    // ascending-notes-color-spiral: no required metrics
+    {
+      page: "ascending-notes-color-spiral.html",
+      runs: [0, 1, 2, 3, 4].map((i) => ({
+        run: i + 1,
+        metrics: {
+          executionTime: 3000,
+          blocksExecuted: 150,
+        },
       })),
     },
   ];
+}
+
+/** Current results that would post a bootstrapTotal regression on their own merits. */
+function writeCurrent(): string {
+  const file = path.join(dir, "current.json");
+  const current = buildCompleteCurrentResults();
   fs.writeFileSync(file, JSON.stringify(current));
   return file;
 }
@@ -150,7 +243,11 @@ describe("report harness gate", () => {
     expect(boot.status).toBe("INCONCLUSIVE");
     expect(boot.note).toContain("aaaaaaa");
     expect(boot.note).toContain("bbbbbbb");
-    expect(report.check.summary.failed).toBe(false);
+    // The harness mismatch withholds verdicts, but this deliberately partial
+    // baseline still requires a capture before its fingerprint cells can be
+    // certified.
+    expect(report.check.summary.failed).toBe(true);
+    expect(report.check.summary.captureNeeded).toBe(true);
     expect(report.check.summary.regression).toBe(0);
     expect(report.check.summary.warning).toBe(0);
   });
@@ -367,16 +464,14 @@ describe("report exact fingerprint cells", () => {
 
   function writeExactCurrent(ratio: number, count: number): string {
     const file = path.join(dir, "current-exact.json");
-    const current: PageResult[] = [
-      {
-        page: "Frere-Jacques.html",
-        runs: [0, 1, 2, 3, 4].map((i) => ({
-          run: i + 1,
-          metrics: { transportEventRatio: ratio, transportEventCount: count },
-        })),
-      },
-    ];
-    fs.writeFileSync(file, JSON.stringify(current));
+    const base = buildCompleteCurrentResults();
+    // Override just the Frere-Jacques metrics we care about for this test
+    const frere = base.find((p) => p.page === "Frere-Jacques.html")!;
+    for (const run of frere.runs) {
+      run.metrics.transportEventRatio = ratio;
+      run.metrics.transportEventCount = count;
+    }
+    fs.writeFileSync(file, JSON.stringify(base));
     return file;
   }
 
@@ -407,5 +502,199 @@ describe("report exact fingerprint cells", () => {
     expect(count.currentMedian).toBe(0);
     expect(report.check.summary.changed).toBe(2);
     expect(report.check.summary.failed).toBe(true);
+  });
+});
+
+describe("report required fingerprint cells", () => {
+  it("flags an absent required metric as CHANGED instead of omitting it", async () => {
+    process.env.PERFSENSE_REF = "aaaaaaa";
+    const baselineFile = path.join(dir, "required-baseline.json");
+    const currentFile = path.join(dir, "required-current.json");
+    const baseline: BaselineData = {
+      schema: "perfsense-baseline-v2",
+      schemaVersion: 2,
+      createdAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(),
+      runs: 5,
+      source: "test",
+      harness: { ref: "aaaaaaa", source: "PERFSENSE_REF" },
+      pages: {
+        "Frere-Jacques.html": {
+          transportEventRatio: stats([0.0253, 0.0253, 0.0253, 0.0253, 0.0253]),
+          transportEventCount: stats([268, 268, 268, 268, 268]),
+        },
+      },
+    };
+    const current: PageResult[] = [
+      {
+        page: "Frere-Jacques.html",
+        runs: [{ run: 1, metrics: { transportEventCount: 268 } }],
+      },
+    ];
+    fs.writeFileSync(baselineFile, JSON.stringify(baseline));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+
+    const report = await reportJson(baselineFile, currentFile);
+    const missing = report.check.results.find(
+      (r: any) =>
+        r.page === "Frere-Jacques.html" &&
+        r.metric === "transportEventRatio",
+    );
+    expect(missing.status).toBe("CHANGED");
+    expect(missing.note).toContain("required fingerprint missing");
+    expect(report.check.summary.failed).toBe(true);
+  });
+
+  it("flags a completely missing required fixture as CHANGED", async () => {
+    process.env.PERFSENSE_REF = "aaaaaaa";
+    const baselineFile = path.join(dir, "req-baseline.json");
+    const currentFile = path.join(dir, "req-current.json");
+    const baseline: BaselineData = {
+      schema: "perfsense-baseline-v2",
+      schemaVersion: 2,
+      createdAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(),
+      runs: 5,
+      source: "test",
+      harness: { ref: "aaaaaaa", source: "PERFSENSE_REF" },
+      pages: {
+        "Frere-Jacques.html": {
+          transportEventRatio: stats([0.0253, 0.0253, 0.0253, 0.0253, 0.0253]),
+          transportEventCount: stats([268, 268, 268, 268, 268]),
+        },
+      },
+    };
+    // Current results omit Frere-Jacques entirely (missing fixture)
+    const current: PageResult[] = [];
+    fs.writeFileSync(baselineFile, JSON.stringify(baseline));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+
+    const report = await reportJson(baselineFile, currentFile);
+    const missing = report.check.results.find(
+      (r: any) =>
+        r.page === "Frere-Jacques.html" && r.metric === "transportEventRatio",
+    );
+    expect(missing.status).toBe("CHANGED");
+    expect(missing.note).toContain("fixture missing");
+    expect(report.check.summary.failed).toBe(true);
+  });
+
+  it("flags a fixture with zero completed runs as CHANGED", async () => {
+    process.env.PERFSENSE_REF = "aaaaaaa";
+    const baselineFile = path.join(dir, "req-baseline.json");
+    const currentFile = path.join(dir, "req-current.json");
+    const baseline: BaselineData = {
+      schema: "perfsense-baseline-v2",
+      schemaVersion: 2,
+      createdAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(),
+      runs: 5,
+      source: "test",
+      harness: { ref: "aaaaaaa", source: "PERFSENSE_REF" },
+      pages: {
+        "Frere-Jacques.html": {
+          transportEventRatio: stats([0.0253, 0.0253, 0.0253, 0.0253, 0.0253]),
+          transportEventCount: stats([268, 268, 268, 268, 268]),
+        },
+      },
+    };
+    // Current has the fixture but zero runs
+    const current: PageResult[] = [
+      { page: "Frere-Jacques.html", runs: [] },
+    ];
+    fs.writeFileSync(baselineFile, JSON.stringify(baseline));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+
+    const report = await reportJson(baselineFile, currentFile);
+    const missing = report.check.results.find(
+      (r: any) =>
+        r.page === "Frere-Jacques.html" && r.metric === "transportEventRatio",
+    );
+    expect(missing.status).toBe("CHANGED");
+    expect(missing.note).toContain("zero completed runs");
+    expect(report.check.summary.failed).toBe(true);
+  });
+
+  it("flags null-on-every-run as CHANGED", async () => {
+    process.env.PERFSENSE_REF = "aaaaaaa";
+    const baselineFile = path.join(dir, "req-baseline.json");
+    const currentFile = path.join(dir, "req-current.json");
+    const baseline: BaselineData = {
+      schema: "perfsense-baseline-v2",
+      schemaVersion: 2,
+      createdAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(),
+      runs: 5,
+      source: "test",
+      harness: { ref: "aaaaaaa", source: "PERFSENSE_REF" },
+      pages: {
+        "Frere-Jacques.html": {
+          transportEventRatio: stats([0.0253, 0.0253, 0.0253, 0.0253, 0.0253]),
+          transportEventCount: stats([268, 268, 268, 268, 268]),
+        },
+      },
+    };
+    // Current has the fixture with runs but all metrics null
+    const current: PageResult[] = [
+      {
+        page: "Frere-Jacques.html",
+        runs: [
+          { run: 1, metrics: { transportEventRatio: null, transportEventCount: null } },
+          { run: 2, metrics: { transportEventRatio: null, transportEventCount: null } },
+        ],
+      },
+    ];
+    fs.writeFileSync(baselineFile, JSON.stringify(baseline));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+
+    const report = await reportJson(baselineFile, currentFile);
+    const missing = report.check.results.find(
+      (r: any) =>
+        r.page === "Frere-Jacques.html" && r.metric === "transportEventRatio",
+    );
+    expect(missing.status).toBe("CHANGED");
+    expect(missing.note).toContain("null on every run");
+    expect(report.check.summary.failed).toBe(true);
+  });
+
+  it("prints loud summary for required cells with no baseline value", async () => {
+    process.env.PERFSENSE_REF = "aaaaaaa";
+    const baselineFile = path.join(dir, "req-baseline.json");
+    const currentFile = path.join(dir, "req-current.json");
+    // Baseline missing required metrics for Frere-Jacques
+    const baseline: BaselineData = {
+      schema: "perfsense-baseline-v2",
+      schemaVersion: 2,
+      createdAt: new Date().toISOString(),
+      generatedAt: new Date().toISOString(),
+      runs: 5,
+      source: "test",
+      harness: { ref: "aaaaaaa", source: "PERFSENSE_REF" },
+      pages: {},
+    };
+    const current: PageResult[] = buildCompleteCurrentResults();
+    fs.writeFileSync(baselineFile, JSON.stringify(baseline));
+    fs.writeFileSync(currentFile, JSON.stringify(current));
+
+    let stderr = "";
+    const originalError = console.error;
+    console.error = (msg?: unknown) => {
+      stderr += String(msg ?? "") + "\n";
+    };
+    try {
+      const report = await reportJson(baselineFile, currentFile);
+      // 4 fixtures × their required metrics (2 + 2 + 3 + 4 = 11).
+      // No reference exists, therefore these are loud NO_BASELINE rows, never
+      // fabricated CHANGED findings.
+      expect(report.check.summary.changed).toBe(0);
+      expect(report.check.summary.noBaseline).toBe(11);
+      expect(report.check.summary.captureNeeded).toBe(true);
+      expect(report.check.summary.failed).toBe(true);
+      expect(stderr).toContain("fingerprint cell");
+      expect(stderr).toContain("no baseline value");
+      expect(stderr).toContain("capture needed");
+    } finally {
+      console.error = originalError;
+    }
   });
 });

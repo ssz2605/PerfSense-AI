@@ -70,6 +70,7 @@ export interface CheckResult {
     noBaseline?: number;
     inconclusive?: number;
     changed?: number;
+    captureNeeded?: boolean;
   };
   correlation?: CorrelationResult;
   correlationError?: string;

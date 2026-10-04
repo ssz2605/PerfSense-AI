@@ -30,6 +30,7 @@ import {
   isMetricExact,
   getExactTolerance,
   isMetricRequired,
+  getFixtureContract,
 } from "@perfsense/benchmark-matrix";
 import {
   generatePRComment,
@@ -46,6 +47,7 @@ import {
   currentHarnessRef,
   harnessComparability,
 } from "./env";
+import { findRequiredFailures } from "./requiredMetrics";
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
@@ -128,7 +130,7 @@ function getMetricNames(runs: PageResult["runs"]): string[] {
   return Array.from(names);
 }
 
-export async function run(argv: string[]): Promise<void> {
+export async function run(argv: string[]): Promise<boolean> {
   let baselineFile = "baseline.json";
   let currentFile = "results.json";
   let configPath: string | undefined;
@@ -246,6 +248,7 @@ export async function run(argv: string[]): Promise<void> {
   const allResults: CheckResultEntry[] = [];
   let hasRegression = false;
   let hasWarning = false;
+  let captureNeeded = false;
 
   for (const pageResult of current) {
     const pageName = pageResult.page;
@@ -258,8 +261,31 @@ export async function run(argv: string[]): Promise<void> {
     }
     if (!baselinePage) {
       process.stderr.write(
-        `Warning: no baseline data for page "${pageName}", skipping\n`,
+        `Warning: no baseline data for page "${pageName}"\n`,
       );
+      for (const metric of getFixtureContract(pageName)?.requiredMetrics ?? []) {
+        const values = collectCurrentValues(pageResult, metric);
+        allResults.push({
+          page: pageName,
+          metric,
+          status: "NO_BASELINE",
+          deltaPercent: null,
+          absDelta: null,
+          baselineMedian: null,
+          currentMedian: values.length > 0 ? median(values) : null,
+          failThreshold: getThreshold(metric, config).fail,
+          pValue: null,
+          effectSize: null,
+          effectZ: null,
+          confidenceInterval: null,
+          baselineCV: null,
+          stabilityTier: null,
+          envMatched,
+          baselineAgeDays: ageDays,
+          note: "required fingerprint has no baseline value — capture needed",
+        });
+        captureNeeded = true;
+      }
       continue;
     }
     const metricNames = getMetricNames(pageResult.runs);
@@ -299,6 +325,7 @@ export async function run(argv: string[]): Promise<void> {
           baselineAgeDays: ageDays,
           note: "no baseline captured for this metric",
         });
+        if (isMetricRequired(pageName, metric)) captureNeeded = true;
         continue;
       }
       if (currentValues.length === 0) {
@@ -456,6 +483,55 @@ export async function run(argv: string[]): Promise<void> {
       allResults.push(entry);
       if (entry.status === "REGRESSION") hasRegression = true;
       if (entry.status === "WARNING") hasWarning = true;
+    }
+  }
+
+  // Required fingerprint cells: any approved fixture that lists requiredMetrics
+  // and reads null on all runs must be reported as CHANGED (not silently
+  // omitted), and the run must fail (exit 1). "No data" must never be reported
+  // as "no change" for a seam that exists to prove an optimization is wired.
+  const requiredFailures = findRequiredFailures(current);
+  if (requiredFailures.length > 0) {
+    for (const rf of requiredFailures) {
+      console.error(
+        `REQUIRED MISSING (${rf.fixture}/${rf.metric}): ${rf.reason}`,
+      );
+      allResults.push({
+        page: rf.fixture,
+        metric: rf.metric,
+        status: "CHANGED",
+        deltaPercent: null,
+        absDelta: null,
+        baselineMedian: null,
+        currentMedian: null,
+        failThreshold: 0,
+        pValue: null,
+        effectSize: null,
+        effectZ: null,
+        confidenceInterval: null,
+        baselineCV: null,
+        stabilityTier: null,
+        envMatched,
+        baselineAgeDays: ageDays,
+        note: `required fingerprint missing: ${rf.reason}`,
+      });
+    }
+    hasRegression = true;
+  }
+
+  // Also flag any cell with NO_BASELINE that is also required — these should
+  // have been caught by findRequiredFailures but as a belt-and-suspenders,
+  // make them loud in the summary.
+  const noBaselineRequired = allResults.filter(
+    (r) => r.status === "NO_BASELINE" && isMetricRequired(r.page, r.metric),
+  );
+  if (noBaselineRequired.length > 0) {
+    captureNeeded = true;
+    console.error(
+      `${noBaselineRequired.length} fingerprint cell(s) have no baseline value — capture needed:`,
+    );
+    for (const r of noBaselineRequired) {
+      console.error(`  ${r.page}/${r.metric}`);
     }
   }
 
@@ -666,7 +742,8 @@ export async function run(argv: string[]): Promise<void> {
     noBaseline: allResults.filter((r) => r.status === "NO_BASELINE").length,
     inconclusive: allResults.filter((r) => r.status === "INCONCLUSIVE").length,
     changed: allResults.filter((r) => r.status === "CHANGED").length,
-    failed: hasRegression,
+    failed: hasRegression || captureNeeded,
+    captureNeeded,
   };
   const checkResult: CheckResult = {
     results: allResults,
@@ -722,4 +799,5 @@ export async function run(argv: string[]): Promise<void> {
   } else {
     console.log(comment);
   }
+  return hasRegression || captureNeeded;
 }

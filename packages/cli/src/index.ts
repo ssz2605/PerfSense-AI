@@ -40,7 +40,9 @@ if (command === 'benchmark') {
     process.exit(1);
   });
 } else if (command === 'report') {
-  report(rest).catch((err: Error) => {
+  report(rest).then((failed) => {
+    if (failed) process.exitCode = 1;
+  }).catch((err: Error) => {
     console.error('Report failed:', err.message);
     process.exit(1);
   });
