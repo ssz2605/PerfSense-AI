@@ -32,12 +32,20 @@ const TRANSPORT_COLLECTOR_SNIPPET = `
     // logo.js:1820-1856 is a three-way branch for every note delay. The
     // transport branch (1820-1840) calls logo.synth.transport.schedule when
     // the clock is available and running; the fallback branch (1841-1856)
-    // schedules the same delay through logo._timerManager.setGuardedTimeout —
-    // the setTimeout path that PR #7703 replaced. setGuardedTimeout is used
-    // nowhere else in the app (only logo.js:1843), so wrapping the instance
-    // counts exactly the delays that bypassed Tone.Transport. That gives
-    // transportEventRatio = transportCalls / (transportCalls + fallbackCalls):
-    // clock-independent, and it falls off 1.0 the moment scheduling reverts.
+    // schedules the same delay through logo._timerManager.setGuardedTimeout -
+    // the setTimeout path that PR #7703 replaced. The transport branch gates on
+    // isClockRunning, so a page whose audio clock is not running sends every
+    // note delay down the fallback and the ratio reads 0; that is the same
+    // number a revert produces, which is why the tripwire is baseline-relative.
+    //
+    // Wrapping the instance counts every guarded timer call, not just note
+    // delays: logo.js also schedules unhighlights, its async yield and the
+    // notation-export yield through setGuardedTimeout, and
+    // embedded-graphics-scheduler.js calls it 17 times. The denominator is
+    // therefore all guarded scheduling, and embedded-graphics-heavy projects
+    // dilute the share. Reverting #7703 still moves the number (the numerator
+    // falls to 0 while the denominator gains every note delay), which is what
+    // the mutation proof relies on.
     if (!ps.fallbackLatched && mb.logo._timerManager &&
         typeof mb.logo._timerManager.setGuardedTimeout === 'function') {
       ps.fallbackLatched = true;
@@ -225,6 +233,13 @@ export const EXECUTION_COLLECTOR = EXECUTION_COLLECTOR_SNIPPET;
 export { runEndPollSnippet as RUN_END_POLL };
 
 export async function installTransportCollector(page: Page): Promise<void> {
+  // Wait for the bridge first. The snippet returns early when `mb.logo` is
+  // absent and nothing ever retries it, so without this wait the collector
+  // silently never latches and every seam metric reads null. It looked fine on
+  // crabcanon-plot only because that page's approved set contains render
+  // plugins, whose installer does wait and happens to run first; Frere-Jacques
+  // has no render plugin, so transportEventRatio read null on all five runs.
+  await waitForStageBridge(page);
   await page.evaluate(TRANSPORT_COLLECTOR_SNIPPET);
 }
 

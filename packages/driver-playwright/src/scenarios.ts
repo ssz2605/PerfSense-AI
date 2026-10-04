@@ -766,7 +766,7 @@ const interactSnippet = `
  *   - canvasInkDrift    ~ 0 : repeated runs do not accumulate ink
  *   - retainedHeapSlope ~ 0 : repeated runs do not retain heap
  *   - logoSoundsRetained   0 : sounds were disposed (PR #7832)
- *   - stopListCallbacksRun>0 : stop-list callbacks fired (PR #7832)
+ *   - synthsRetained       0 : instruments were disposed (PR #7832)
  *
  * Two runs cannot show any of this, which is why the old playToCompletion
  * double-run produced a memoryDelta/retainedHeap of exactly 0.
@@ -939,7 +939,7 @@ const SCENARIO_SNIPPETS: Record<ScenarioName, string> = {
   [Scenario.RepeatedRun]: repeatedRunSnippet,
 };
 
-async function callWithArg(
+export async function callWithArg(
   page: Page,
   snippet: string,
   arg: unknown,

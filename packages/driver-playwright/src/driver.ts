@@ -9,7 +9,7 @@ import type {
   BenchmarkRun,
   PageResult,
 } from "@perfsense/core";
-import { runScenario, isScenario, Scenario } from "./scenarios";
+import { runScenario, isScenario, Scenario, callWithArg } from "./scenarios";
 import type { ScenarioName } from "./scenarios";
 import { isMetricApproved } from "@perfsense/benchmark-matrix";
 
@@ -63,6 +63,74 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
     return await Promise.race([promise, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Readiness gate for the open-project phase, as a page-evaluated snippet.
+ *
+ * Exported for the same reason `openProjectSnippet` is: it is the only thing
+ * standing between the fixture drop and a silently swallowed change event, and
+ * a rule that load-bearing should not be verifiable only by a full capture.
+ *
+ * The mock rule is the load-bearing part. The mock bridge
+ * (examples/music-blocks/pages/fast-project.html) has `ui` but no `blocks`: it
+ * fakes the workspace by writing DOM into #blocks. The real bridge assigns its
+ * properties one at a time (js/activity.js:2865-2896) and sets `blocks` before
+ * `ui`, so `ui` without `blocks` is unreachable there -- which is what makes
+ * the rule sound rather than a guess. Testing `ui` alone used to classify the
+ * REAL app as a mock, because setupPostNav's waitForStageBridge had already
+ * made the bridge appear before this gate ran -- which then took the
+ * `bridged || booted` branch, skipped waiting for `bridged`, and disabled the
+ * phantom-load guard, on the very pages that need it.
+ */
+export const openProjectGateSnippet = `
+(function (timeoutMs) {
+  var start = Date.now();
+  var mb0 = (window).__mb;
+  var isMock = !!(mb0 && mb0.ui && !mb0.blocks);
+  return (async function () {
+    for (;;) {
+      var perf = (window).__mbPerf;
+      var measures = (perf && perf.measures) ? perf.measures : {};
+      var booted = Object.keys(measures).some(function (k) {
+        return typeof measures[k] === "number";
+      });
+      var mb = (window).__mb;
+      var bridged = !!(mb && mb.ui && mb.blocks);
+      if (isMock ? (bridged || booted) : bridged) {
+        return { ready: true, isMock: isMock };
+      }
+      if (Date.now() - start > timeoutMs) {
+        return { ready: false, isMock: isMock };
+      }
+      await new Promise(function (r) { setTimeout(r, 100); });
+    }
+  })();
+})
+`;
+
+/**
+ * Runs the open-project drop, separating the two kinds of failure.
+ *
+ * A missing file input is an environment problem: the run still measures
+ * whatever the page shows, so it warns and carries on. A guard firing means the
+ * workspace is not the one the metrics describe, which is not recoverable --
+ * and letting it through is how a phantom load becomes a baseline that looks
+ * fine. `fail()` marks the latter.
+ */
+export async function withOpenProjectGuard(
+  body: (fail: () => void) => Promise<void>,
+  onEnvironmentError: (message: string) => void,
+): Promise<void> {
+  let guardFailed = false;
+  try {
+    await body(() => {
+      guardFailed = true;
+    });
+  } catch (e) {
+    if (guardFailed) throw e;
+    onEnvironmentError((e as Error).message);
   }
 }
 
@@ -211,52 +279,23 @@ export class BenchmarkDriver {
                     // activity init, which finishes seconds AFTER the page 'load'
                     // event. Dropping the file before the handler exists silently
                     // does nothing, so the project never opens and the phase's
-                    // stability wait burns the whole run budget. Wait for the
-                    // init-complete signal (`window.__mb` bridge with `ui` and
-                    // `blocks`) before injecting the fixture. Pages without the
-                    // bridge (static mocks) proceed immediately.
-                    try {
-                      // The app attaches the file input's 'change' handler during
-                      // activity init, which finishes seconds AFTER the page 'load'
-                      // event. Dropping the file before the handler exists silently
-                      // does nothing, so the project never opens and the phase's
-                      // stability wait burns the whole run budget. `window.__mb` is
-                      // only created at the END of init, so absence of the bridge
-                      // at this point does NOT mean the page is a static mock.
-                      // Static mocks set window.__mb synchronously at parse time; the real
-                      // Music Blocks app creates the bridge only at the END of
-                      // activity init (seconds after "load"). A bridge present
-                      // at the first check is the mock signal — mocks attach
-                      // the #myOpenFile handler at parse time, so they are
-                      // ready immediately. The real app must wait for
-                      // `bridged` (mb.ui && mb.blocks) so the fixture drop
-                      // cannot race the change handler and get silently
-                      // swallowed (phantom projectLoadTime).
-                      const gate = await page.evaluate(
-                        async (timeoutMs: number) => {
-                          const start = Date.now();
-                          const isMock = !!
-                            ((window as any).__mb && (window as any).__mb.ui);
-                          for (;;) {
-                            const perf = (window as any).__mbPerf;
-                            const measures =
-                              perf && perf.measures ? perf.measures : {};
-                            const booted = Object.keys(measures).some(
-                              (k) => typeof measures[k] === "number",
-                            );
-                            const mb = (window as any).__mb;
-                            const bridged = !!(mb && mb.ui && mb.blocks);
-                            if (isMock ? bridged || booted : bridged) {
-                              return { ready: true, isMock };
-                            }
-                            if (Date.now() - start > timeoutMs) {
-                              return { ready: false, isMock };
-                            }
-                            await new Promise((r) => setTimeout(r, 100));
-                          }
-                        },
+                    // stability wait burns the whole run budget. `window.__mb` is
+                    // only created at the END of init, so absence of the bridge
+                    // at this point does NOT mean the page is a static mock.
+                    // Static mocks set window.__mb synchronously at parse time; the real
+                    // Music Blocks app creates the bridge only at the END of
+                    // activity init (seconds after "load"), carrying both `ui`
+                    // and `blocks` -- which is how the gate tells them apart. The
+                    // real app must wait for `bridged` (mb.ui && mb.blocks) so the
+                    // fixture drop cannot race the change handler and get silently
+                    // swallowed (phantom projectLoadTime).
+                    await withOpenProjectGuard(
+                      async (fail) => {
+                        const gate = (await callWithArg(
+                        page,
+                        openProjectGateSnippet,
                         120000,
-                      );
+                      )) as { ready: boolean; isMock: boolean };
                       const ready = gate.ready;
                       const isMockPage = gate.isMock;
                       if (ready) {
@@ -292,20 +331,25 @@ export class BenchmarkDriver {
                           30000,
                         );
                         if (!opened) {
+                          fail();
                           throw new Error(
                             `fixture ${fixtureAbs} never opened: #myOpenFile change handler did not fire within 30s`,
                           );
                         }
+                        // Do not add a block-count wait here. openProjectSnippet
+                        // already holds the count steady across 7 samples before
+                        // it reports ready, and it is the phase that owns
+                        // projectLoadTime -- a second wait would inflate that
+                        // number by its own duration.
                       } else {
                         console.warn(
                           "  [openProject] app never became init-complete; skipping file drop",
                         );
                       }
-                    } catch (e) {
-                      console.warn(
-                        `  [openProject] no file input (${(e as Error).message})`,
-                      );
-                    }
+                      },
+                      (message) =>
+                        console.warn(`  [openProject] no file input (${message})`),
+                    );
                   }
                   try {
                     await runScenario(phase, page, {
