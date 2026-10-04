@@ -732,6 +732,11 @@ const interactSnippet = `
 
   render.cacheRebuildCount = cacheRebuilds;
   render.viewportCulledBlocks = maxCulled;
+  render.blockTotal = blockTotal;
+  // Swept blocks whose highlight/unhighlight did NOT rebuild a cache — the
+  // #7815 skip's direct observable. Each swept block issues the two guarded
+  // calls; a rebuilt cache was counted, everything else was skipped.
+  render.cacheSkippedCount = Math.max(0, sweepCount - cacheRebuilds);
   render.panSteps = done;
   render.panMovedPx = panMovedPx;
   render.highlightSwept = sweepCount;

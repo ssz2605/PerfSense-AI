@@ -40,9 +40,9 @@ describe("Benchmark Matrix contract", () => {
       "exportMIDITime",
       "saveAsLilypondTime",
       "stageUpdateCallCount",
+      "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
-      "logoSoundsRetained",
       "stageUpdateTime",
       "stageUpdateMax",
       "cacheRebuildCount",
@@ -80,7 +80,9 @@ describe("Benchmark Matrix contract", () => {
       "stageUpdateTime",
       "stageUpdateMax",
       "cacheRebuildCount",
+      "cacheSkippedCount",
       "viewportCulledBlocks",
+      "viewportCulledFraction",
       "transportEventRatio",
     ]);
   });
@@ -162,13 +164,14 @@ describe("Benchmark Matrix contract", () => {
     );
   });
 
-  it("no longer exposes maxDepth anywhere in the matrix", () => {
-    // maxDepth was removed from the approved matrix entirely: it is neither
-    // approved nor unverified for any fixture.
+  it("exposes maxDepth only for Rainbow's #7970 fast path", () => {
+    // maxDepth was removed from the approved matrix everywhere except
+    // Rainbow, where it is the #7970 fast-run fingerprint.
     expect(isMetricApproved("musical-tree.html", "maxDepth")).toBe(false);
     expect(
       isMetricApproved("ascending-notes-color-spiral.html", "maxDepth"),
     ).toBe(false);
+    expect(isMetricApproved("RainbowConnection.html", "maxDepth")).toBe(true);
     expect(isMetricUnverified("musical-tree.html", "maxDepth")).toBe(false);
     expect(
       isMetricUnverified("ascending-notes-color-spiral.html", "maxDepth"),
@@ -243,9 +246,11 @@ describe("Benchmark Matrix contract", () => {
     expect(isMetricWarnOnly("crabcanon-plot.html", "stageUpdateTime")).toBe(
       true,
     );
+    // The crab canon render/cull cells are exact fingerprints now: a revert
+    // of #7738/#7815 must read as CHANGED, not as a capped warning.
     expect(
       isMetricWarnOnly("crabcanon-plot.html", "viewportCulledBlocks"),
-    ).toBe(true);
+    ).toBe(false);
     expect(isMetricWarnOnly("crabcanon-plot.html", "transportEventRatio")).toBe(
       true,
     );

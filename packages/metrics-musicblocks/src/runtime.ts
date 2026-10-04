@@ -114,7 +114,10 @@ const RENDER_COLLECTOR_SNIPPET = `
 `;
 
 /** Waits for the benchmark bridge to expose the EaselJS stage. */
-async function waitForStageBridge(page: Page, timeoutMs = 90000): Promise<boolean> {
+async function waitForStageBridge(
+  page: Page,
+  timeoutMs = 90000,
+): Promise<boolean> {
   const start = Date.now();
   for (;;) {
     const ready = await page.evaluate(() => {
@@ -265,6 +268,37 @@ export async function installExecutionCollector(page: Page): Promise<void> {
   await page.evaluate(EXECUTION_COLLECTOR_SNIPPET);
 }
 
+/**
+ * Wraps `__mb.render.refreshCanvas` with a counter. Installed after the
+ * stage bridge appears, so every refresh request the app issues from then
+ * on is visible. PR #7923 suppressed the load-time flood of these calls;
+ * the healthy build therefore records a characteristic low count.
+ */
+export async function installRefreshCanvasCounter(
+  page: Page,
+): Promise<boolean> {
+  const ready = await waitForStageBridge(page);
+  if (!ready) return false;
+  return page.evaluate(() => {
+    const ps = ((window as any).__perfsense =
+      (window as any).__perfsense || {});
+    if (ps.refreshCanvasLatched)
+      return typeof ps.refreshCanvasCalls === "number";
+    const mb = (window as any).__mb;
+    if (!mb || !mb.render || typeof mb.render.refreshCanvas !== "function") {
+      return false;
+    }
+    ps.refreshCanvasLatched = true;
+    ps.refreshCanvasCalls = 0;
+    const orig = mb.render.refreshCanvas.bind(mb.render);
+    mb.render.refreshCanvas = function () {
+      ps.refreshCanvasCalls = ps.refreshCanvasCalls + 1;
+      return orig.apply(mb.render, arguments as any);
+    };
+    return true;
+  });
+}
+
 export async function waitForRunEnd(
   page: Page,
   timeoutMs = 120000,
@@ -317,6 +351,10 @@ export async function readPerfsense(
       stageUpdateCallCount: null,
       cacheRebuildCount: null,
       viewportCulledBlocks: null,
+      transportEventCount: null,
+      cacheSkippedCount: null,
+      viewportCulledFraction: null,
+      refreshCanvasCallCount: null,
       panSteps: null,
     };
     const mean = (arr: number[]) =>
@@ -325,6 +363,7 @@ export async function readPerfsense(
       out.callbackLatencyMean = mean(t.latencies);
       out.callbackLatencyMax =
         t.latencies.length === 0 ? null : Math.max(...t.latencies);
+      out.transportEventCount = typeof t.count === "number" ? t.count : null;
       let drift = 0;
       for (let i = 1; i < t.scheduledTx.length; i++) {
         const ds =
@@ -350,12 +389,17 @@ export async function readPerfsense(
     // Tone.Transport rather than the setTimeout fallback (logo.js:1841-1856).
     // 1.0 means every delay used the transport seam. Null when either counter
     // is unavailable, so a missing seam reads as "no data", never as healthy.
-    if (ps.transport && typeof ps.transport.count === "number" &&
-        typeof ps.fallbackDelayCount === "number") {
+    if (
+      ps.transport &&
+      typeof ps.transport.count === "number" &&
+      typeof ps.fallbackDelayCount === "number"
+    ) {
       const viaTransport = ps.transport.count;
       const viaFallback = ps.fallbackDelayCount;
       out.transportEventRatio =
-        viaTransport + viaFallback === 0 ? null : viaTransport / (viaTransport + viaFallback);
+        viaTransport + viaFallback === 0
+          ? null
+          : viaTransport / (viaTransport + viaFallback);
     }
 
     // Render axis. Frames are [startMs, durationMs] pairs; windowStart/windowEnd
@@ -363,22 +407,55 @@ export async function readPerfsense(
     // the sample.
     const render = ps.render;
     if (render) {
-      const wStart = typeof render.windowStart === "number" ? render.windowStart : null;
-      const wEnd = typeof render.windowEnd === "number" ? render.windowEnd : null;
+      const wStart =
+        typeof render.windowStart === "number" ? render.windowStart : null;
+      const wEnd =
+        typeof render.windowEnd === "number" ? render.windowEnd : null;
       const all: number[][] = Array.isArray(render.frames) ? render.frames : [];
-      const inWindow = (wStart === null || wEnd === null)
-        ? []
-        : all.filter((f) => Array.isArray(f) && f[0] >= wStart && f[0] <= wEnd);
+      const inWindow =
+        wStart === null || wEnd === null
+          ? []
+          : all.filter(
+              (f) => Array.isArray(f) && f[0] >= wStart && f[0] <= wEnd,
+            );
       const durations = inWindow.map((f) => f[1]);
       out.stageUpdateTime = mean(durations);
-      out.stageUpdateMax = durations.length === 0 ? null : Math.max.apply(null, durations);
+      out.stageUpdateMax =
+        durations.length === 0 ? null : Math.max.apply(null, durations);
       out.stageUpdateFrameCount = durations.length;
       // Pan bookkeeping written by the interact scenario.
       out.cacheRebuildCount =
-        typeof render.cacheRebuildCount === "number" ? render.cacheRebuildCount : null;
+        typeof render.cacheRebuildCount === "number"
+          ? render.cacheRebuildCount
+          : null;
       out.viewportCulledBlocks =
-        typeof render.viewportCulledBlocks === "number" ? render.viewportCulledBlocks : null;
-      out.panSteps = typeof render.panSteps === "number" ? render.panSteps : null;
+        typeof render.viewportCulledBlocks === "number"
+          ? render.viewportCulledBlocks
+          : null;
+      out.cacheSkippedCount =
+        typeof render.cacheSkippedCount === "number"
+          ? render.cacheSkippedCount
+          : null;
+      out.panSteps =
+        typeof render.panSteps === "number" ? render.panSteps : null;
+      // #7738 in fraction form: how much of the workspace the culler hid at
+      // peak, out of every block on the canvas. Same Deterministic pan, so
+      // the healthy build records the same numerator and denominator.
+      const culledPeak = out.viewportCulledBlocks;
+      const blockTotal =
+        typeof render.blockTotal === "number" ? render.blockTotal : null;
+      out.viewportCulledFraction =
+        culledPeak !== null && blockTotal !== null && blockTotal > 0
+          ? culledPeak / blockTotal
+          : null;
+      // #7923: refreshCanvas() calls across the whole run. Reverting the
+      // _suppressRefresh guard makes the load repaint, so this counter
+      // spikes; the healthy build leaves it near zero outside explicit
+      // interactions.
+      out.refreshCanvasCallCount =
+        typeof ps.refreshCanvasCalls === "number"
+          ? ps.refreshCanvasCalls
+          : null;
       // #7923: how many stage.update() frames the load actually painted. With
       // _suppressRefresh set (js/activity.js:2152-2159) refreshCanvas() returns
       // early, stageDirty is never set during decode, and the render loop goes
@@ -420,20 +497,26 @@ export async function readPerfsense(
 
     // Natural-completion lifecycle (#7832 / #7848). Written by the
     // playToCompletion and repeatedRun scenarios, never by product code.
-    if (typeof ps.synthsRetained === "number") out.synthsRetained = ps.synthsRetained;
-    if (typeof ps.logoSoundsRetained === "number") out.logoSoundsRetained = ps.logoSoundsRetained;
+    if (typeof ps.synthsRetained === "number")
+      out.synthsRetained = ps.synthsRetained;
+    if (typeof ps.logoSoundsRetained === "number")
+      out.logoSoundsRetained = ps.logoSoundsRetained;
 
     // Canvas accumulation across repeated runs (#7848). inkCoverage is the mean
     // coverage across runs, inkDrift is (last - first): the invariant "a natural
     // completion preserves the drawing and never accumulates" reads as
     // inkDrift ~= 0.
-    if (typeof ps.canvasInkCoverage === "number") out.canvasInkCoverage = ps.canvasInkCoverage;
-    if (typeof ps.canvasInkDrift === "number") out.canvasInkDrift = ps.canvasInkDrift;
+    if (typeof ps.canvasInkCoverage === "number")
+      out.canvasInkCoverage = ps.canvasInkCoverage;
+    if (typeof ps.canvasInkDrift === "number")
+      out.canvasInkDrift = ps.canvasInkDrift;
     if (typeof ps.repeatRuns === "number") out.repeatRuns = ps.repeatRuns;
-    if (typeof ps.retainedHeapSlope === "number") out.retainedHeapSlope = ps.retainedHeapSlope;
+    if (typeof ps.retainedHeapSlope === "number")
+      out.retainedHeapSlope = ps.retainedHeapSlope;
 
     // Export peak heap (#7970's documented memory cost).
-    if (typeof ps.peakHeapDuringExport === "number") out.peakHeapDuringExport = ps.peakHeapDuringExport;
+    if (typeof ps.peakHeapDuringExport === "number")
+      out.peakHeapDuringExport = ps.peakHeapDuringExport;
     return out;
   }, scheduleLagHelper);
 }

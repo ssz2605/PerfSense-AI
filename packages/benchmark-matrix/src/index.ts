@@ -71,35 +71,38 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
     fixture: "RainbowConnection.html",
     displayName: "Rainbow Connection",
-    // stageUpdateCallCount is the direct read on PR #7923: with
-    // _suppressRefresh set, refreshCanvas() returns early, stageDirty is never
-    // raised during decode and the render loop goes idle, so the load paints
-    // almost nothing. projectLoadTime only sees the side effect.
+    // refreshCanvasCallCount is the direct read on PR #7923: with
+    // _suppressRefresh set, refreshCanvas() returns early during decode and
+    // the load repaints almost nothing. Best-guess timing (projectLoadTime)
+    // only sees the side effect. stageUpdateCallCount corroborates it from
+    // the other side: the EaselJS update that the early-returned
+    // refreshCanvas would have queued simply never runs. Note it counts
+    // frames for the WHOLE page after openStart, not just the load.
     // peakHeapDuringExport covers the memory half of PR #7970, which bought a
     // ~23x export speedup with a documented ~1.3 MB -> ~27 MB peak and had no
     // cell watching it. maxDepth is back for the same PR: the fast-run path
     // raises execution depth 1 -> 100, and driver.ts filters unapproved metrics
     // at the collection boundary, so it was not being measured at all.
-    // logoSoundsRetained is a floor, not a cost: RainbowConnection is the one
-    // fixture whose program plays sound blocks (MediaBlocks.js:554), so this is
-    // where PR #7832's cleanup is observable.
     metrics: [
       "projectLoadTime",
       "saveTime",
       "exportMIDITime",
       "saveAsLilypondTime",
       "stageUpdateCallCount",
+      "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
-      "logoSoundsRetained",
       "stageUpdateTime",
       "stageUpdateMax",
       "cacheRebuildCount",
       "viewportCulledBlocks",
     ],
-    unverified: ["maxDepth"],
+    unverified: [],
+    // #7923 + #7970's witnesses, exact: the healthy build records
+    // deterministic values for both, and reverting either PR moves its cell.
+    exactMetrics: ["refreshCanvasCallCount", "maxDepth"],
+    requiredMetrics: ["refreshCanvasCallCount", "maxDepth"],
     warnOnly: [
-      "maxDepth",
       "stageUpdateTime",
       "stageUpdateMax",
       "cacheRebuildCount",
@@ -137,13 +140,17 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // "better" direction: they are compared for equality. transportEventCount
     // is the numerator the ratio is computed from, so it stays put even if an
     // unrelated scheduler inflates the denominator.
-    exactMetrics: ["transportEventRatio", "transportEventCount"],
+    exactMetrics: [
+      "transportEventRatio",
+      "transportEventCount",
+      "synthsRetained",
+    ],
     // Required: these cells exist to prove the seam is still wired, so a null
     // reading is a broken collector, not an unchanged build.
     requiredMetrics: ["transportEventRatio", "transportEventCount"],
     // synthsRetained is PR #7832's fingerprint; it is exact too but not
-    // required here yet, because the healthy value is 0 and that is also what a
-    // collector failure would produce (see 2b).
+    // required, because the healthy value is 0 and that is also what a
+    // collector failure would produce.
     // The four timing cells stay warn-only: their CI variance is not yet
     // characterized, so they can warn but must not post a hard REGRESSION.
     warnOnly: [
@@ -151,7 +158,6 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "callbackLatencyMax",
       "cumulativeDrift",
       "voiceOnsetError",
-      "synthsRetained",
     ],
   },
   {
@@ -175,16 +181,13 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "retainedHeapSlope",
       "synthsRetained",
     ],
+    // #7848's invariants as exact fingerprints: inkCoverage ~constant and
+    // inkDrift ~0 on a healthy build, and both collapse to 0 / grow when
+    // cleanup is re-wired to clear the drawing.
+    exactMetrics: ["canvasInkCoverage", "canvasInkDrift", "synthsRetained"],
     // Memory stays warn-only (real values now, but CI-heap noise is hard to
     // characterize): it can warn but never post a hard REGRESSION.
-    warnOnly: [
-      "memoryDelta",
-      "retainedHeap",
-      "canvasInkCoverage",
-      "canvasInkDrift",
-      "retainedHeapSlope",
-      "synthsRetained",
-    ],
+    warnOnly: ["memoryDelta", "retainedHeap", "retainedHeapSlope"],
   },
   {
     fixture: "ascending-notes-color-spiral.html",
@@ -217,21 +220,29 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       "stageUpdateTime",
       "stageUpdateMax",
       "cacheRebuildCount",
+      "cacheSkippedCount",
       "viewportCulledBlocks",
+      "viewportCulledFraction",
       "transportEventRatio",
     ],
     unverified: [],
-    // The lag probes stay warn-only: at ~1e-11 ms they sit below timer
-    // resolution, so they can inform but never fail a PR on their own. The
-    // render cells start warn-only too — they are new and their CI spread is
-    // not yet characterised across many baseline captures.
-    warnOnly: [
-      "stageUpdateTime",
-      "stageUpdateMax",
+    // #7738 / #7815 as exact fingerprints: culling state and the skipped
+    // cache rebuilds are deterministic on an unchanged build, and each
+    // collapses the other way when its PR is reverted. Required: a null
+    // reading means the collector broke, not that the state was neutral.
+    exactMetrics: [
       "cacheRebuildCount",
+      "cacheSkippedCount",
       "viewportCulledBlocks",
-      "transportEventRatio",
+      "viewportCulledFraction",
     ],
+    requiredMetrics: [
+      "cacheRebuildCount",
+      "cacheSkippedCount",
+      "viewportCulledBlocks",
+      "viewportCulledFraction",
+    ],
+    warnOnly: ["stageUpdateTime", "stageUpdateMax", "transportEventRatio"],
   },
 ];
 
@@ -263,7 +274,11 @@ const METRIC_UNITS: Record<string, string> = {
   stageUpdateCallCount: "count",
   cacheRebuildCount: "count",
   viewportCulledBlocks: "count",
+  cacheSkippedCount: "count",
+  viewportCulledFraction: "ratio",
+  refreshCanvasCallCount: "count",
   transportEventRatio: "ratio",
+  transportEventCount: "count",
   synthsRetained: "count",
   logoSoundsRetained: "count",
   canvasInkCoverage: "ratio",

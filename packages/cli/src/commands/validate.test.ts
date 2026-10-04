@@ -85,8 +85,8 @@ function healthyPages(): BaselineData["pages"] {
       stageUpdateCallCount: stats([1140, 1150, 1145, 1155, 1148]),
       peakHeapDuringExport: stats([27.0e6, 27.1e6, 27.2e6, 27.3e6, 27.4e6]),
       maxDepth: stats([100, 100, 100, 100, 100]),
-      // A floor, not a cost: healthy is 0 after _cleanupAfterCompletion().
-      logoSoundsRetained: stats([0, 0, 0, 0, 0]),
+      // PR #7923's witnesses: suppressed load paints almost nothing.
+      refreshCanvasCallCount: stats([11, 11, 11, 11, 11]),
       stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
       stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
       cacheRebuildCount: stats([242, 245, 244, 243, 246]),
@@ -128,7 +128,9 @@ function healthyPages(): BaselineData["pages"] {
       stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
       stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
       cacheRebuildCount: stats([242, 245, 244, 243, 246]),
+      cacheSkippedCount: stats([687, 687, 687, 687, 687]),
       viewportCulledBlocks: stats([794, 796, 797, 795, 796]),
+      viewportCulledFraction: stats([0.855, 0.855, 0.855, 0.855, 0.855]),
       transportEventRatio: stats([0.0251, 0.0254, 0.0253, 0.0252, 0.0255]),
     },
   };
@@ -142,6 +144,7 @@ function healthyPages(): BaselineData["pages"] {
 function pagesWithRetiredCells(): ReturnType<typeof healthyPages> {
   const pages = healthyPages() as Record<string, Record<string, unknown>>;
   pages["Frere-Jacques.html"].scheduleCount = stats([268, 268, 268, 268, 268]);
+  pages["RainbowConnection.html"].logoSoundsRetained = stats([0, 0, 0, 0, 0]);
   pages["Frere-Jacques.html"].executionTime = stats([
     4200, 4210, 4220, 4230, 4240,
   ]);
@@ -349,8 +352,9 @@ describe("validateBaseline", () => {
     const result = validateBaseline(baseline(pagesWithRetiredCells()));
     const orphans = result.defects.filter((d) => d.kind === "orphan-cell");
     // Nine retired cells, plus the two crabcanon lag probes that left the
-    // contract as constant-on-unchanged-code (below timer resolution).
-    expect(orphans.length).toBe(11);
+    // contract as constant-on-unchanged-code (below timer resolution), plus
+    // Rainbow's logoSoundsRetained, which left the matrix entirely.
+    expect(orphans.length).toBe(12);
     for (const metric of [
       "scheduleCount",
       "blocksExecuted",
@@ -518,15 +522,13 @@ describe("validateBaseline", () => {
     });
     expect(result.ok).toBe(true);
     // Nothing left but the probes that genuinely cannot measure anything. The
-    // five zero-variance cells are all floor metrics, where a healthy value of 0
-    // is the *point*: memoryDelta, retainedHeap, logoSoundsRetained and the two
+    // four zero-variance cells: memoryDelta, retainedHeap, and the two
     // synthsRetained cells. The one below-resolution cell is cumulativeDrift.
     // The crabcanon scheduleLag probes used to be the other two; they left the
     // contract because on unchanged code they are constant, which is zero
     // variance rather than a below-resolution reading.
     expect(result.defects.map((d) => `${d.metric}:${d.kind}`).sort()).toEqual([
       "cumulativeDrift:below-resolution",
-      "logoSoundsRetained:zero-variance",
       "memoryDelta:zero-variance",
       "retainedHeap:zero-variance",
       "synthsRetained:zero-variance",
