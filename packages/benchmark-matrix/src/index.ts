@@ -29,19 +29,48 @@ export interface FixtureContract {
    * whose CI variance is not yet characterized.
    */
   warnOnly?: string[];
+  /**
+   * Fingerprint metrics, compared for equality rather than for improvement.
+   *
+   * These are deterministic counters that stand in for one optimization: the
+   * healthy build produces a fixed value, and editing or reverting the optimized
+   * code path changes it. That makes a signed-delta comparison the wrong tool in
+   * both directions — a percentage says nothing about whether a code path is
+   * still wired, and for a counter that must not fall, a drop reads as an
+   * improvement.
+   *
+   * An exact cell reports CHANGED when |current - baseline| exceeds its
+   * tolerance, whichever way the value moved.
+   */
+  exactMetrics?: string[];
+  /**
+   * Per-cell tolerance for exact metrics, in the metric's own unit. Defaults to
+   * 0, which is correct for integer counters that must be bit-identical.
+   */
+  exactTolerance?: Record<string, number>;
+  /**
+   * Metrics whose cell must exist in every capture. If an approved-and-required
+   * metric is null (or absent) on all runs of its fixture, the run is a failure
+   * rather than a silent omission: "no data" must never be reported as "no
+   * change" for a metric that exists to prove an optimization is still in place.
+   */
+  requiredMetrics?: string[];
 }
+
+/** Tolerance for an exact cell when the contract does not state one. */
+export const DEFAULT_EXACT_TOLERANCE = 0;
 
 export const BENCHMARK_MATRIX: FixtureContract[] = [
   {
-    fixture: 'index.html',
-    displayName: 'index.html (bootstrap)',
-    metrics: ['bootstrapTotal', 'initTotal', 'heapAfterBoot'],
+    fixture: "index.html",
+    displayName: "index.html (bootstrap)",
+    metrics: ["bootstrapTotal", "initTotal", "heapAfterBoot"],
     unverified: [],
     warnOnly: [],
   },
   {
-    fixture: 'RainbowConnection.html',
-    displayName: 'Rainbow Connection',
+    fixture: "RainbowConnection.html",
+    displayName: "Rainbow Connection",
     // stageUpdateCallCount is the direct read on PR #7923: with
     // _suppressRefresh set, refreshCanvas() returns early, stageDirty is never
     // raised during decode and the render loop goes idle, so the load paints
@@ -55,31 +84,31 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // fixture whose program plays sound blocks (MediaBlocks.js:554), so this is
     // where PR #7832's cleanup is observable.
     metrics: [
-      'projectLoadTime',
-      'saveTime',
-      'exportMIDITime',
-      'saveAsLilypondTime',
-      'stageUpdateCallCount',
-      'peakHeapDuringExport',
-      'maxDepth',
-      'logoSoundsRetained',
-      'stageUpdateTime',
-      'stageUpdateMax',
-      'cacheRebuildCount',
-      'viewportCulledBlocks',
+      "projectLoadTime",
+      "saveTime",
+      "exportMIDITime",
+      "saveAsLilypondTime",
+      "stageUpdateCallCount",
+      "peakHeapDuringExport",
+      "maxDepth",
+      "logoSoundsRetained",
+      "stageUpdateTime",
+      "stageUpdateMax",
+      "cacheRebuildCount",
+      "viewportCulledBlocks",
     ],
-    unverified: ['maxDepth'],
+    unverified: ["maxDepth"],
     warnOnly: [
-      'maxDepth',
-      'stageUpdateTime',
-      'stageUpdateMax',
-      'cacheRebuildCount',
-      'viewportCulledBlocks',
+      "maxDepth",
+      "stageUpdateTime",
+      "stageUpdateMax",
+      "cacheRebuildCount",
+      "viewportCulledBlocks",
     ],
   },
   {
-    fixture: 'Frere-Jacques.html',
-    displayName: 'Frère Jacques',
+    fixture: "Frere-Jacques.html",
+    displayName: "Frère Jacques",
     // Voice-timing only. The interpreter counters that used to sit here
     // (scheduleCount, executionTime, blocksExecuted, maxQueueDepth) are still
     // collected, but they are not part of the regression contract: blocksExecuted
@@ -87,35 +116,47 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // 21–25 while doing so, so neither can serve as a reference distribution.
     // A metric that varies under identical conditions cannot detect a change.
     //
-    // transportEventRatio and synthsRetained are floor asserts, not costs, and
-    // they are the only two audio-family cells that work on a synthesised
-    // clock: both are counts of events, so neither depends on how accurate the
-    // clock is. cumulativeDrift collapses to ~1e-9 ms headless and cannot see a
+    // transportEventRatio / transportEventCount / synthsRetained are event
+    // counts, not costs, and they are the only audio-family cells that work on
+    // a synthesised clock: neither depends on how accurate the clock is.
+    // cumulativeDrift collapses to ~1e-9 ms headless and cannot see a
     // regression at all.
     metrics: [
-      'callbackLatencyMean',
-      'callbackLatencyMax',
-      'cumulativeDrift',
-      'voiceOnsetError',
-      'transportEventRatio',
-      'synthsRetained',
+      "callbackLatencyMean",
+      "callbackLatencyMax",
+      "cumulativeDrift",
+      "voiceOnsetError",
+      "transportEventRatio",
+      "transportEventCount",
+      "synthsRetained",
     ],
     unverified: [],
-    // The ratio is a floor (higher is better), so it is gated from below: a
-    // drop means scheduling left the transport seam. Everything else here is
-    // warn-only for the existing reason.
+    // PR #7703's witnesses. Both count delays that took the Tone.Transport
+    // branch instead of the setTimeout fallback, so a revert drives them to 0
+    // (ratio) or near 0 (count). Neither is a cost, so neither has a meaningful
+    // "better" direction: they are compared for equality. transportEventCount
+    // is the numerator the ratio is computed from, so it stays put even if an
+    // unrelated scheduler inflates the denominator.
+    exactMetrics: ["transportEventRatio", "transportEventCount"],
+    // Required: these cells exist to prove the seam is still wired, so a null
+    // reading is a broken collector, not an unchanged build.
+    requiredMetrics: ["transportEventRatio", "transportEventCount"],
+    // synthsRetained is PR #7832's fingerprint; it is exact too but not
+    // required here yet, because the healthy value is 0 and that is also what a
+    // collector failure would produce (see 2b).
+    // The four timing cells stay warn-only: their CI variance is not yet
+    // characterized, so they can warn but must not post a hard REGRESSION.
     warnOnly: [
-      'callbackLatencyMean',
-      'callbackLatencyMax',
-      'cumulativeDrift',
-      'voiceOnsetError',
-      'transportEventRatio',
-      'synthsRetained',
+      "callbackLatencyMean",
+      "callbackLatencyMax",
+      "cumulativeDrift",
+      "voiceOnsetError",
+      "synthsRetained",
     ],
   },
   {
-    fixture: 'musical-tree.html',
-    displayName: 'musical-tree',
+    fixture: "musical-tree.html",
+    displayName: "musical-tree",
     // maxLogicalDepth was dropped from the contract for the same reason as
     // Frère's interpreter counters: it never produced a usable baseline cell.
     // The repeated-run cells are PR #7848's invariants: a natural completion
@@ -125,36 +166,36 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // endpoint probes; they read exactly 0 without --enable-precise-memory-info
     // and stay for continuity only.
     metrics: [
-      'maxQueueDepth',
-      'executionTime',
-      'memoryDelta',
-      'retainedHeap',
-      'canvasInkCoverage',
-      'canvasInkDrift',
-      'retainedHeapSlope',
-      'synthsRetained',
+      "maxQueueDepth",
+      "executionTime",
+      "memoryDelta",
+      "retainedHeap",
+      "canvasInkCoverage",
+      "canvasInkDrift",
+      "retainedHeapSlope",
+      "synthsRetained",
     ],
     // Memory stays warn-only (real values now, but CI-heap noise is hard to
     // characterize): it can warn but never post a hard REGRESSION.
     warnOnly: [
-      'memoryDelta',
-      'retainedHeap',
-      'canvasInkCoverage',
-      'canvasInkDrift',
-      'retainedHeapSlope',
-      'synthsRetained',
+      "memoryDelta",
+      "retainedHeap",
+      "canvasInkCoverage",
+      "canvasInkDrift",
+      "retainedHeapSlope",
+      "synthsRetained",
     ],
   },
   {
-    fixture: 'ascending-notes-color-spiral.html',
-    displayName: 'ascending-notes-color-spiral',
+    fixture: "ascending-notes-color-spiral.html",
+    displayName: "ascending-notes-color-spiral",
     // maxLogicalDepth removed from the contract (see Frère Jacques above).
-    metrics: ['executionTime', 'blocksExecuted'],
+    metrics: ["executionTime", "blocksExecuted"],
     warnOnly: [],
   },
   {
-    fixture: 'crabcanon-plot.html',
-    displayName: 'crabcanon-plot',
+    fixture: "crabcanon-plot.html",
+    displayName: "crabcanon-plot",
     // executionTime, blocksExecuted and maxQueueDepth are collected but not
     // part of the contract: blocksExecuted is deterministic and therefore
     // inert, and maxQueueDepth is not reproducible on this fixture (10,10,8,8,8
@@ -173,11 +214,11 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // state read; stageUpdateTime/Max are the cost it buys; cacheRebuildCount
     // is PR #7815's cost.
     metrics: [
-      'stageUpdateTime',
-      'stageUpdateMax',
-      'cacheRebuildCount',
-      'viewportCulledBlocks',
-      'transportEventRatio',
+      "stageUpdateTime",
+      "stageUpdateMax",
+      "cacheRebuildCount",
+      "viewportCulledBlocks",
+      "transportEventRatio",
     ],
     unverified: [],
     // The lag probes stay warn-only: at ~1e-11 ms they sit below timer
@@ -185,54 +226,56 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // render cells start warn-only too — they are new and their CI spread is
     // not yet characterised across many baseline captures.
     warnOnly: [
-      'stageUpdateTime',
-      'stageUpdateMax',
-      'cacheRebuildCount',
-      'viewportCulledBlocks',
-      'transportEventRatio',
+      "stageUpdateTime",
+      "stageUpdateMax",
+      "cacheRebuildCount",
+      "viewportCulledBlocks",
+      "transportEventRatio",
     ],
   },
 ];
 
 /** Presentation units used to format metric values in the report. */
 const METRIC_UNITS: Record<string, string> = {
-  bootstrapTotal: 'ms',
-  initTotal: 'ms',
-  heapAfterBoot: 'MB',
-  projectLoadTime: 'ms',
-  saveTime: 'ms',
-  exportMIDITime: 'ms',
-  saveAsLilypondTime: 'ms',
-  memoryDelta: 'B',
-  retainedHeap: 'B',
-  callbackLatencyMean: 'ms',
-  callbackLatencyMax: 'ms',
-  cumulativeDrift: 'ms',
-  voiceOnsetError: 'ms',
-  scheduleLagMean: 'ms',
-  scheduleLagMax: 'ms',
-  executionTime: 'ms',
-  maxQueueDepth: 'count',
-  maxLogicalDepth: 'count',
-  scheduleCount: 'count',
-  blocksExecuted: 'count',
-  maxDepth: 'count',
-  stageUpdateTime: 'ms',
-  stageUpdateMax: 'ms',
-  stageUpdateCallCount: 'count',
-  cacheRebuildCount: 'count',
-  viewportCulledBlocks: 'count',
-  transportEventRatio: 'ratio',
-  synthsRetained: 'count',
-  logoSoundsRetained: 'count',
-  canvasInkCoverage: 'ratio',
-  canvasInkDrift: 'ratio',
-  retainedHeapSlope: 'B/run',
-  peakHeapDuringExport: 'B',
+  bootstrapTotal: "ms",
+  initTotal: "ms",
+  heapAfterBoot: "MB",
+  projectLoadTime: "ms",
+  saveTime: "ms",
+  exportMIDITime: "ms",
+  saveAsLilypondTime: "ms",
+  memoryDelta: "B",
+  retainedHeap: "B",
+  callbackLatencyMean: "ms",
+  callbackLatencyMax: "ms",
+  cumulativeDrift: "ms",
+  voiceOnsetError: "ms",
+  scheduleLagMean: "ms",
+  scheduleLagMax: "ms",
+  executionTime: "ms",
+  maxQueueDepth: "count",
+  maxLogicalDepth: "count",
+  scheduleCount: "count",
+  blocksExecuted: "count",
+  maxDepth: "count",
+  stageUpdateTime: "ms",
+  stageUpdateMax: "ms",
+  stageUpdateCallCount: "count",
+  cacheRebuildCount: "count",
+  viewportCulledBlocks: "count",
+  transportEventRatio: "ratio",
+  synthsRetained: "count",
+  logoSoundsRetained: "count",
+  canvasInkCoverage: "ratio",
+  canvasInkDrift: "ratio",
+  retainedHeapSlope: "B/run",
+  peakHeapDuringExport: "B",
 };
 
 /** Case-insensitive fixture lookup. */
-export function getFixtureContract(fixture: string): FixtureContract | undefined {
+export function getFixtureContract(
+  fixture: string,
+): FixtureContract | undefined {
   const key = fixture.toLowerCase();
   return BENCHMARK_MATRIX.find((c) => c.fixture.toLowerCase() === key);
 }
@@ -275,6 +318,43 @@ export function isMetricWarnOnly(fixture: string, metric: string): boolean {
   return (contract.warnOnly ?? []).some((m) => m.toLowerCase() === key);
 }
 
+/**
+ * True when the metric is a fingerprint: compared for equality, not for
+ * improvement. Every metric not listed keeps the historical signed-delta
+ * behaviour.
+ */
+export function isMetricExact(fixture: string, metric: string): boolean {
+  const contract = getFixtureContract(fixture);
+  if (!contract) return false;
+  const key = metric.toLowerCase();
+  return (contract.exactMetrics ?? []).some((m) => m.toLowerCase() === key);
+}
+
+/**
+ * Allowed |current - baseline| for an exact cell before it counts as CHANGED.
+ * 0 for integer counters, so only a bit-identical value passes.
+ */
+export function getExactTolerance(fixture: string, metric: string): number {
+  const contract = getFixtureContract(fixture);
+  if (!contract) return DEFAULT_EXACT_TOLERANCE;
+  const table = contract.exactTolerance ?? {};
+  const match = Object.keys(table).find(
+    (k) => k.toLowerCase() === metric.toLowerCase(),
+  );
+  return match !== undefined ? table[match] : DEFAULT_EXACT_TOLERANCE;
+}
+
+/**
+ * True when the metric's absence must be treated as a failure rather than a
+ * skipped row. Only meaningful for metrics that are also approved.
+ */
+export function isMetricRequired(fixture: string, metric: string): boolean {
+  const contract = getFixtureContract(fixture);
+  if (!contract) return false;
+  const key = metric.toLowerCase();
+  return (contract.requiredMetrics ?? []).some((m) => m.toLowerCase() === key);
+}
+
 /** Human-friendly fixture heading (falls back to the raw fixture key). */
 export function formatFixtureName(fixture: string): string {
   const contract = getFixtureContract(fixture);
@@ -283,26 +363,26 @@ export function formatFixtureName(fixture: string): string {
 
 /** Unit used to format a metric value (defaults to ms). */
 export function getMetricUnit(metric: string): string {
-  return METRIC_UNITS[metric] ?? 'ms';
+  return METRIC_UNITS[metric] ?? "ms";
 }
 
 /** Formats a raw metric value with its unit for the report table. */
 export function formatMetricValue(value: number, metric: string): string {
   const unit = getMetricUnit(metric);
-  if (unit === 'B') return `${value.toFixed(0)} B`;
+  if (unit === "B") return `${value.toFixed(0)} B`;
   // Heap values are captured in bytes but presented in MB.
-  if (unit === 'MB') return `${(value / 1e6).toFixed(1)} MB`;
-  if (unit === 'count') return `${value.toFixed(0)}`;
+  if (unit === "MB") return `${(value / 1e6).toFixed(1)} MB`;
+  if (unit === "count") return `${value.toFixed(0)}`;
   // Unitless ratios read better as a percentage: a floor like
   // transportEventRatio is 1.0 healthy, and ink coverage is a canvas fraction.
-  if (unit === 'ratio') return `${(value * 100).toFixed(1)}%`;
-  if (unit === 'B/run') return `${value.toFixed(0)} B/run`;
+  if (unit === "ratio") return `${(value * 100).toFixed(1)}%`;
+  if (unit === "B/run") return `${value.toFixed(0)} B/run`;
   return `${value.toFixed(1)} ms`;
 }
 
 /** Formats a delta percentage with sign, e.g. +159.4%. Null (near-zero) renders as '—'. */
 export function formatDeltaPercent(deltaPercent: number | null): string {
-  if (deltaPercent === null || !isFinite(deltaPercent)) return '—';
-  const sign = deltaPercent >= 0 ? '+' : '';
+  if (deltaPercent === null || !isFinite(deltaPercent)) return "—";
+  const sign = deltaPercent >= 0 ? "+" : "";
   return `${sign}${deltaPercent.toFixed(1)}%`;
 }

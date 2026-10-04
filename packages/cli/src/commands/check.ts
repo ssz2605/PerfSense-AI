@@ -1,18 +1,42 @@
-import path from 'path';
-import fs from 'fs';
-import type { PageResult, BaselineData, BaselinePage, ThresholdLevel, PerfSenseConfig, MetricCheckResult, CheckStatus, Evidence, EvidenceHighlight } from '@perfsense/core';
-import { median, classifyRegression } from '@perfsense/statistics';
-import type { ClassificationResult } from '@perfsense/statistics';
-import { EvidenceCollector, isUrl, pageNameFromUrl } from '@perfsense/driver-playwright';
-import { isKnownFixture, isMetricApproved, isMetricWarnOnly } from '@perfsense/benchmark-matrix';
-import { CORE_PLUGIN_REGISTRY } from '@perfsense/metrics-core';
+import path from "path";
+import fs from "fs";
+import type {
+  PageResult,
+  BaselineData,
+  BaselinePage,
+  ThresholdLevel,
+  PerfSenseConfig,
+  MetricCheckResult,
+  CheckStatus,
+  Evidence,
+  EvidenceHighlight,
+} from "@perfsense/core";
+import {
+  median,
+  classifyRegression,
+  classifyExact,
+} from "@perfsense/statistics";
+import type { ClassificationResult } from "@perfsense/statistics";
+import {
+  EvidenceCollector,
+  isUrl,
+  pageNameFromUrl,
+} from "@perfsense/driver-playwright";
+import {
+  isKnownFixture,
+  isMetricApproved,
+  isMetricWarnOnly,
+  isMetricExact,
+  getExactTolerance,
+} from "@perfsense/benchmark-matrix";
+import { CORE_PLUGIN_REGISTRY } from "@perfsense/metrics-core";
 import {
   MUSICBLOCKS_PLUGIN_REGISTRY,
   checkTransportSeamAlive,
   FRERE_JACQUES_TRANSPORT_METRICS,
-} from '@perfsense/metrics-musicblocks';
-import type { TransportSeamCheck } from '@perfsense/metrics-musicblocks';
-import type { MetricPlugin } from '@perfsense/core';
+} from "@perfsense/metrics-musicblocks";
+import type { TransportSeamCheck } from "@perfsense/metrics-musicblocks";
+import type { MetricPlugin } from "@perfsense/core";
 
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
@@ -23,10 +47,10 @@ const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
 /** Same registry the benchmark command resolves metrics from, so check sees every metric. */
 const PLUGIN_REGISTRY: Record<string, new () => MetricPlugin> = {
   ...CORE_PLUGIN_REGISTRY,
-  ...MUSICBLOCKS_PLUGIN_REGISTRY
+  ...MUSICBLOCKS_PLUGIN_REGISTRY,
 };
 
-function getMetricNames(runs: PageResult['runs']): string[] {
+function getMetricNames(runs: PageResult["runs"]): string[] {
   const names = new Set<string>();
   for (const run of runs) {
     for (const key of Object.keys(run.metrics)) {
@@ -39,12 +63,12 @@ function getMetricNames(runs: PageResult['runs']): string[] {
 function loadConfig(configPath?: string): PerfSenseConfig | null {
   const searchPaths: string[] = configPath
     ? [path.resolve(configPath)]
-    : [path.resolve('perfsense.config.json')];
+    : [path.resolve("perfsense.config.json")];
 
   for (const sp of searchPaths) {
     if (fs.existsSync(sp)) {
       try {
-        return JSON.parse(fs.readFileSync(sp, 'utf-8'));
+        return JSON.parse(fs.readFileSync(sp, "utf-8"));
       } catch {
         console.warn(`Warning: could not parse config file: ${sp}`);
       }
@@ -53,7 +77,10 @@ function loadConfig(configPath?: string): PerfSenseConfig | null {
   return null;
 }
 
-function getThreshold(metric: string, config: PerfSenseConfig | null): ThresholdLevel {
+function getThreshold(
+  metric: string,
+  config: PerfSenseConfig | null,
+): ThresholdLevel {
   if (config?.thresholds?.[metric]) {
     return config.thresholds[metric];
   }
@@ -68,31 +95,34 @@ function computeDeltaPercent(baseline: number, current: number): number {
   return ((current - baseline) / baseline) * 100;
 }
 
-function determineStatus(deltaPercent: number, threshold: ThresholdLevel): CheckStatus {
-  if (deltaPercent < 0) return 'PASS';
-  if (deltaPercent < threshold.warning) return 'PASS';
-  if (deltaPercent < threshold.fail) return 'WARNING';
-  return 'REGRESSION';
+function determineStatus(
+  deltaPercent: number,
+  threshold: ThresholdLevel,
+): CheckStatus {
+  if (deltaPercent < 0) return "PASS";
+  if (deltaPercent < threshold.warning) return "PASS";
+  if (deltaPercent < threshold.fail) return "WARNING";
+  return "REGRESSION";
 }
 
 /** Applies a maxStatus ceiling to an already-computed verdict (delta-only path). */
 export function clampStatus(
   status: CheckStatus,
-  maxStatus: 'pass' | 'warning' | undefined,
+  maxStatus: "pass" | "warning" | undefined,
 ): CheckStatus {
-  if (maxStatus === 'warning' && status === 'REGRESSION') return 'WARNING';
-  if (maxStatus === 'pass' && status !== 'PASS') return 'PASS';
+  if (maxStatus === "warning" && status === "REGRESSION") return "WARNING";
+  if (maxStatus === "pass" && status !== "PASS") return "PASS";
   return status;
 }
 
 function padEnd(s: string, len: number): string {
-  return s.length >= len ? s : s + ' '.repeat(len - s.length);
+  return s.length >= len ? s : s + " ".repeat(len - s.length);
 }
 
-function mapStatus(s: ClassificationResult['status']): CheckStatus {
-  if (s === 'regression') return 'REGRESSION';
-  if (s === 'warning') return 'WARNING';
-  return 'PASS';
+function mapStatus(s: ClassificationResult["status"]): CheckStatus {
+  if (s === "regression") return "REGRESSION";
+  if (s === "warning") return "WARNING";
+  return "PASS";
 }
 
 interface EnrichedCheckResult extends MetricCheckResult {
@@ -102,16 +132,23 @@ interface EnrichedCheckResult extends MetricCheckResult {
   evidence?: Evidence[];
 }
 
-function collectCurrentValues(pageResult: PageResult, metric: string): number[] {
+function collectCurrentValues(
+  pageResult: PageResult,
+  metric: string,
+): number[] {
   return pageResult.runs
     .map((r) => r.metrics[metric])
-    .filter((v): v is number => typeof v === 'number');
+    .filter((v): v is number => typeof v === "number");
 }
 
-function collectBaselineValues(baselinePage: BaselinePage, metric: string): number[] | null {
+function collectBaselineValues(
+  baselinePage: BaselinePage,
+  metric: string,
+): number[] | null {
   const stats = baselinePage[metric];
   if (!stats) return null;
-  if (Array.isArray(stats.values) && stats.values.length > 0) return stats.values;
+  if (Array.isArray(stats.values) && stats.values.length > 0)
+    return stats.values;
   return null;
 }
 
@@ -151,11 +188,11 @@ export function findDeadSeamPages(
     };
     for (const run of pageResult.runs) {
       const m = run.metrics;
-      if (typeof m.transportEventRatio === 'number') {
+      if (typeof m.transportEventRatio === "number") {
         transportEventRatio = m.transportEventRatio;
       }
       for (const key of Object.keys(audio)) {
-        if (typeof m[key] === 'number') audio[key] = m[key] as number;
+        if (typeof m[key] === "number") audio[key] = m[key] as number;
       }
     }
     // The seam's healthy share is ~0.025, not ~1, so the check is relative: the
@@ -201,35 +238,46 @@ async function collectEvidence(
     const resolved = path.resolve(configPath);
     if (fs.existsSync(resolved)) {
       try {
-        rawConfig = JSON.parse(fs.readFileSync(resolved, 'utf-8'));
-      } catch { /* ignore */ }
+        rawConfig = JSON.parse(fs.readFileSync(resolved, "utf-8"));
+      } catch {
+        /* ignore */
+      }
     }
   }
   if (!rawConfig) {
     try {
-      const defaultCfg = path.resolve('perfsense.config.json');
+      const defaultCfg = path.resolve("perfsense.config.json");
       if (fs.existsSync(defaultCfg)) {
-        rawConfig = JSON.parse(fs.readFileSync(defaultCfg, 'utf-8'));
+        rawConfig = JSON.parse(fs.readFileSync(defaultCfg, "utf-8"));
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   if (!rawConfig) {
-    console.error('  [evidence] No config found; cannot determine pages to re-run. Skipping evidence.');
+    console.error(
+      "  [evidence] No config found; cannot determine pages to re-run. Skipping evidence.",
+    );
     return;
   }
 
   const configPages: string[] = rawConfig.pages || [];
   if (configPages.length === 0) {
-    console.error('  [evidence] No pages in config. Skipping evidence.');
+    console.error("  [evidence] No pages in config. Skipping evidence.");
     return;
   }
 
   const configDir = process.cwd();
 
-  const resolvedPagePaths = configPages.map((p: string) => (isUrl(p) ? p : path.resolve(configDir, p)));
+  const resolvedPagePaths = configPages.map((p: string) =>
+    isUrl(p) ? p : path.resolve(configDir, p),
+  );
   const localPages = resolvedPagePaths.filter((p: string) => !isUrl(p));
-  const pagesDir = localPages.length > 0 ? path.dirname(localPages[0]) : configDir;
-  const relativePages = resolvedPagePaths.map((p: string) => (isUrl(p) ? p : path.relative(pagesDir, p)));
+  const pagesDir =
+    localPages.length > 0 ? path.dirname(localPages[0]) : configDir;
+  const relativePages = resolvedPagePaths.map((p: string) =>
+    isUrl(p) ? p : path.relative(pagesDir, p),
+  );
 
   const pagesToEvince = relativePages.filter((p: string) => {
     const basename = isUrl(p) ? pageNameFromUrl(p) : path.basename(p);
@@ -246,7 +294,7 @@ async function collectEvidence(
 
   const collector = new EvidenceCollector(8935, 1500);
 
-  console.error('\n  [evidence] ---');
+  console.error("\n  [evidence] ---");
   let evidenceMap: Record<string, Evidence[]>;
   try {
     evidenceMap = await collector.collect(plugins, pagesDir, pagesToEvince);
@@ -257,32 +305,32 @@ async function collectEvidence(
 
   for (const result of allResults) {
     const pageEvidence = evidenceMap[result.page];
-    if (pageEvidence && result.status === 'REGRESSION') {
+    if (pageEvidence && result.status === "REGRESSION") {
       result.evidence = pageEvidence;
     }
   }
 }
 
 export async function run(argv: string[]): Promise<void> {
-  let baselineFile = 'baseline.json';
-  let currentFile = 'results.json';
+  let baselineFile = "baseline.json";
+  let currentFile = "results.json";
   let configPath: string | undefined;
   let useStatistical = false;
   let formatJson = false;
   let noEvidence = false;
 
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--baseline' && i + 1 < argv.length) {
+    if (argv[i] === "--baseline" && i + 1 < argv.length) {
       baselineFile = argv[++i];
-    } else if (argv[i] === '--current' && i + 1 < argv.length) {
+    } else if (argv[i] === "--current" && i + 1 < argv.length) {
       currentFile = argv[++i];
-    } else if (argv[i] === '--config' && i + 1 < argv.length) {
+    } else if (argv[i] === "--config" && i + 1 < argv.length) {
       configPath = argv[++i];
-    } else if (argv[i] === '--statistical') {
+    } else if (argv[i] === "--statistical") {
       useStatistical = true;
-    } else if (argv[i] === '--format' && i + 1 < argv.length) {
-      formatJson = argv[++i] === 'json';
-    } else if (argv[i] === '--no-evidence') {
+    } else if (argv[i] === "--format" && i + 1 < argv.length) {
+      formatJson = argv[++i] === "json";
+    } else if (argv[i] === "--no-evidence") {
       noEvidence = true;
     }
   }
@@ -299,8 +347,12 @@ export async function run(argv: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const baseline: BaselineData = JSON.parse(fs.readFileSync(baselinePath, 'utf-8'));
-  const current: PageResult[] = JSON.parse(fs.readFileSync(currentPath, 'utf-8'));
+  const baseline: BaselineData = JSON.parse(
+    fs.readFileSync(baselinePath, "utf-8"),
+  );
+  const current: PageResult[] = JSON.parse(
+    fs.readFileSync(currentPath, "utf-8"),
+  );
   const config = loadConfig(configPath);
 
   const allResults: EnrichedCheckResult[] = [];
@@ -314,12 +366,16 @@ export async function run(argv: string[]): Promise<void> {
     // Benchmark Matrix enforcement: only approved fixture/metric combinations
     // are compared.
     if (!isKnownFixture(pageName)) {
-      process.stderr.write(`Warning: page "${pageName}" not in Benchmark Matrix, skipping\n`);
+      process.stderr.write(
+        `Warning: page "${pageName}" not in Benchmark Matrix, skipping\n`,
+      );
       continue;
     }
 
     if (!baselinePage) {
-      process.stderr.write(`Warning: no baseline data for page "${pageName}", skipping\n`);
+      process.stderr.write(
+        `Warning: no baseline data for page "${pageName}", skipping\n`,
+      );
       continue;
     }
 
@@ -327,19 +383,25 @@ export async function run(argv: string[]): Promise<void> {
 
     for (const metric of metricNames) {
       if (!isMetricApproved(pageName, metric)) {
-        process.stderr.write(`Warning: ${pageName}/${metric} not approved by Benchmark Matrix, skipping\n`);
+        process.stderr.write(
+          `Warning: ${pageName}/${metric} not approved by Benchmark Matrix, skipping\n`,
+        );
         continue;
       }
 
       const currentValues = collectCurrentValues(pageResult, metric);
       if (currentValues.length === 0) {
-        process.stderr.write(`Warning: no valid values for ${pageName}/${metric}, skipping\n`);
+        process.stderr.write(
+          `Warning: no valid values for ${pageName}/${metric}, skipping\n`,
+        );
         continue;
       }
 
       const baselineStats = baselinePage[metric];
       if (!baselineStats) {
-        process.stderr.write(`Warning: no baseline for ${pageName}/${metric}, skipping\n`);
+        process.stderr.write(
+          `Warning: no baseline for ${pageName}/${metric}, skipping\n`,
+        );
         continue;
       }
 
@@ -349,17 +411,29 @@ export async function run(argv: string[]): Promise<void> {
       const threshold = getThreshold(metric, config);
       // Warn-only metrics can never post REGRESSION; beyond that, the config
       // may cap a metric (memory, drift) at warning too.
-      const effectiveMaxStatus: 'pass' | 'warning' | undefined =
-        isMetricWarnOnly(pageName, metric) ? 'warning' : threshold.maxStatus;
+      const effectiveMaxStatus: "pass" | "warning" | undefined =
+        isMetricWarnOnly(pageName, metric) ? "warning" : threshold.maxStatus;
 
       let status: CheckStatus;
       let pValue: number | null = null;
       let effectSize: number | null = null;
       let confidenceInterval: [number, number] | null = null;
 
-      if (useStatistical) {
+      // Fingerprint cells compare for equality (see report.ts): a deviation
+      // in either direction is CHANGED, never an improvement or noise.
+      if (isMetricExact(pageName, metric)) {
+        const tolerance = getExactTolerance(pageName, metric);
         const baselineValues = collectBaselineValues(baselinePage, metric);
-        const hasBaselineValues = baselineValues !== null && baselineValues.length > 0;
+        const reference =
+          baselineValues && baselineValues.length > 0
+            ? baselineValues
+            : [baselineMedian];
+        const cls = classifyExact(reference, currentValues, tolerance);
+        status = cls.changed ? "CHANGED" : "PASS";
+      } else if (useStatistical) {
+        const baselineValues = collectBaselineValues(baselinePage, metric);
+        const hasBaselineValues =
+          baselineValues !== null && baselineValues.length > 0;
 
         if (hasBaselineValues) {
           const result = classifyRegression(baselineValues, currentValues, {
@@ -371,10 +445,16 @@ export async function run(argv: string[]): Promise<void> {
           effectSize = result.effectSize;
           confidenceInterval = result.confidenceInterval;
         } else {
-          status = clampStatus(determineStatus(deltaPercent, threshold), effectiveMaxStatus);
+          status = clampStatus(
+            determineStatus(deltaPercent, threshold),
+            effectiveMaxStatus,
+          );
         }
       } else {
-        status = clampStatus(determineStatus(deltaPercent, threshold), effectiveMaxStatus);
+        status = clampStatus(
+          determineStatus(deltaPercent, threshold),
+          effectiveMaxStatus,
+        );
       }
 
       allResults.push({
@@ -390,7 +470,7 @@ export async function run(argv: string[]): Promise<void> {
         confidenceInterval,
       });
 
-      if (status === 'REGRESSION') {
+      if (status === "REGRESSION" || status === "CHANGED") {
         hasRegression = true;
         regressedPages.add(pageName);
       }
@@ -402,13 +482,14 @@ export async function run(argv: string[]): Promise<void> {
   // metric — fail loudly rather than report "no data" as a valid run.
   const deadSeams = findDeadSeamPages(
     current,
-    (page) => FRERE_JACQUES_TRANSPORT_METRICS.some((m) => isMetricApproved(page, m)),
+    (page) =>
+      FRERE_JACQUES_TRANSPORT_METRICS.some((m) => isMetricApproved(page, m)),
     baseline ?? null,
   );
   if (deadSeams.length > 0) {
     for (const finding of deadSeams) {
       console.error(
-        `SEAM TRIPWIRE (${finding.page}): ${finding.check.reason ?? 'Tone.Transport seam is dead'}`,
+        `SEAM TRIPWIRE (${finding.page}): ${finding.check.reason ?? "Tone.Transport seam is dead"}`,
       );
     }
     process.exitCode = 1;
@@ -417,7 +498,13 @@ export async function run(argv: string[]): Promise<void> {
 
   // Evidence collection
   if (hasRegression && !noEvidence) {
-    await collectEvidence(regressedPages, current, config, configPath, allResults);
+    await collectEvidence(
+      regressedPages,
+      current,
+      config,
+      configPath,
+      allResults,
+    );
 
     // Copy evidence to all regression results on same page
     const pageToEvidence: Record<string, Evidence[]> = {};
@@ -427,7 +514,7 @@ export async function run(argv: string[]): Promise<void> {
       }
     }
     for (const r of allResults) {
-      if (!r.evidence && pageToEvidence[r.page] && r.status === 'REGRESSION') {
+      if (!r.evidence && pageToEvidence[r.page] && r.status === "REGRESSION") {
         r.evidence = pageToEvidence[r.page];
       }
     }
@@ -442,21 +529,25 @@ export async function run(argv: string[]): Promise<void> {
         status: r.status,
         deltaPercent: Number(r.deltaPercent.toFixed(1)),
         pValue: r.pValue !== null ? Number(r.pValue.toFixed(4)) : null,
-        effectSize: r.effectSize !== null ? Number(r.effectSize.toFixed(2)) : null,
+        effectSize:
+          r.effectSize !== null ? Number(r.effectSize.toFixed(2)) : null,
         confidenceInterval: r.confidenceInterval,
         failThreshold: r.failThreshold,
         baselineMedian: Number(r.baselineMedian.toFixed(1)),
         currentMedian: Number(r.currentMedian.toFixed(1)),
-        evidence: r.evidence ? r.evidence.map((e) => ({
-          type: e.type,
-          summary: e.summary,
-          highlights: e.highlights,
-        })) : undefined,
+        evidence: r.evidence
+          ? r.evidence.map((e) => ({
+              type: e.type,
+              summary: e.summary,
+              highlights: e.highlights,
+            }))
+          : undefined,
       })),
       summary: {
-        pass: allResults.filter((r) => r.status === 'PASS').length,
-        warning: allResults.filter((r) => r.status === 'WARNING').length,
-        regression: allResults.filter((r) => r.status === 'REGRESSION').length,
+        pass: allResults.filter((r) => r.status === "PASS").length,
+        warning: allResults.filter((r) => r.status === "WARNING").length,
+        regression: allResults.filter((r) => r.status === "REGRESSION").length,
+        changed: allResults.filter((r) => r.status === "CHANGED").length,
         failed: hasRegression,
       },
     };
@@ -470,8 +561,12 @@ export async function run(argv: string[]): Promise<void> {
         printedPages.add(r.page);
       }
 
-      const sign = r.deltaPercent >= 0 ? '+' : '';
-      if (r.pValue !== null && r.effectSize !== null && r.confidenceInterval !== null) {
+      const sign = r.deltaPercent >= 0 ? "+" : "";
+      if (
+        r.pValue !== null &&
+        r.effectSize !== null &&
+        r.confidenceInterval !== null
+      ) {
         const ci = r.confidenceInterval;
         const line = `  ${padEnd(r.metric, 8)} ${padEnd(r.status, 10)} ${sign}${r.deltaPercent.toFixed(1)}%  (p=${r.pValue.toFixed(4)}, d=${r.effectSize.toFixed(2)}, CI: [${ci[0].toFixed(1)}, ${ci[1].toFixed(1)}])`;
         console.log(line);
@@ -483,18 +578,28 @@ export async function run(argv: string[]): Promise<void> {
       // Display evidence
       if (r.evidence && r.evidence.length > 0) {
         for (const ev of r.evidence) {
-          const icon = ev.type === 'trace' ? 'Trace' : ev.type === 'network' ? 'Network' : 'Git diff';
-          console.log(`  ${padEnd('', 12)}${icon}: ${ev.summary}`);
+          const icon =
+            ev.type === "trace"
+              ? "Trace"
+              : ev.type === "network"
+                ? "Network"
+                : "Git diff";
+          console.log(`  ${padEnd("", 12)}${icon}: ${ev.summary}`);
           for (const hl of ev.highlights) {
-            const mark = hl.severity === 'critical' ? '!' : hl.severity === 'warning' ? '~' : ' ';
-            console.log(`  ${padEnd('', 16)}${mark} ${hl.label}: ${hl.value}`);
+            const mark =
+              hl.severity === "critical"
+                ? "!"
+                : hl.severity === "warning"
+                  ? "~"
+                  : " ";
+            console.log(`  ${padEnd("", 16)}${mark} ${hl.label}: ${hl.value}`);
           }
         }
       }
     }
 
     if (hasRegression) {
-      console.log('\nFAILED: One or more metrics exceeded the fail threshold.');
+      console.log("\nFAILED: One or more metrics exceeded the fail threshold.");
       process.exit(1);
     }
   }

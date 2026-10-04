@@ -189,7 +189,7 @@ export interface ThresholdLevel {
    * REGRESSION at WARNING, 'pass' caps everything at PASS. Used for metrics
    * whose probes are warn-only until their variance is characterized.
    */
-  maxStatus?: 'pass' | 'warning';
+  maxStatus?: "pass" | "warning";
 }
 
 /**
@@ -227,6 +227,7 @@ export type CheckStatus =
   | "IMPROVEMENT"
   | "LIKELY_NOISE"
   | "NO_BASELINE"
+  | "CHANGED"
   | "INCONCLUSIVE";
 
 export interface MetricCheckResult {
