@@ -202,14 +202,14 @@ export function validateBaseline(
   );
 
   const rainbow = baseline.pages["RainbowConnection.html"];
-  addExerciseDefect(
-    defects,
-    "RainbowConnection.html",
-    "refreshCanvasCallCount",
-    rainbow && findCell(rainbow, "refreshCanvasCallCount"),
-    stats => stats.median === 0 || stats.values.some(value => value === 0),
-    "project refresh path not exercised in this environment",
-  );
+  // No "unexercised" guard on refreshCanvasCallCount: its healthy value on CI is
+  // 0, which is the entire point of PR #7923 (_suppressRefresh stops the load
+  // repainting). A "== 0 means never exercised" test therefore rejected a
+  // correct capture — baseline run #22 failed validate on exactly this, and the
+  // message ("project refresh path not exercised") described the opposite of
+  // what had happened. "Did the wrapper install at all?" is answered by the
+  // collector instead: readPerfsense reports null rather than 0 when the
+  // wrapper never latched, and the required-metric gate fails that loudly.
   addExerciseDefect(
     defects,
     "RainbowConnection.html",

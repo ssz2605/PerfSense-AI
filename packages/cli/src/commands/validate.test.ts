@@ -78,24 +78,16 @@ function healthyPages(): BaselineData["pages"] {
     "RainbowConnection.html": {
       projectLoadTime: stats([9000, 9010, 9020, 9030, 9040]),
       saveTime: stats([150, 151, 152, 153, 154]),
-      exportMIDITime: stats([1700, 1710, 1720, 1730, 1740]),
-      saveAsLilypondTime: stats([1500, 1510, 1520, 1530, 1540]),
-      // stageUpdateCallCount counts stage.update() frames since openStart; the
-      // value here reflects _suppressRefresh keeping the loop idle during decode.
-      stageUpdateCallCount: stats([1140, 1150, 1145, 1155, 1148]),
       peakHeapDuringExport: stats([27.0e6, 27.1e6, 27.2e6, 27.3e6, 27.4e6]),
       maxDepth: stats([100, 100, 100, 100, 100]),
-      // PR #7923's witnesses: suppressed load paints almost nothing.
-      refreshCanvasCallCount: stats([11, 11, 11, 11, 11]),
-      stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
-      stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
-      cacheRebuildCount: stats([242, 245, 244, 243, 246]),
-      viewportCulledBlocks: stats([794, 796, 797, 795, 796]),
+      // PR #7923's witness, and the healthy value is 0: _suppressRefresh stops
+      // the load repainting, so the app asks for no refresh at all. This is why
+      // validate must never treat 0 here as "the path was not exercised".
+      refreshCanvasCallCount: stats([0, 0, 0, 0, 0]),
     },
     "Frere-Jacques.html": {
       callbackLatencyMean: stats([0.5, 0.501, 0.502, 0.503, 0.504]),
       callbackLatencyMax: stats([1.2, 1.21, 1.22, 1.23, 1.24]),
-      cumulativeDrift: stats([1.5e-9, 1.51e-9, 1.52e-9, 1.53e-9, 1.54e-9]),
       voiceOnsetError: stats([0.48, 0.481, 0.482, 0.483, 0.49]),
       // 268 transport.schedule calls vs 10330 setTimeout fallback delays.
       transportEventRatio: stats([0.0251, 0.0254, 0.0253, 0.0252, 0.0255]),
@@ -107,15 +99,12 @@ function healthyPages(): BaselineData["pages"] {
     "musical-tree.html": {
       maxQueueDepth: stats([22, 22, 22, 22, 22]),
       executionTime: stats([41000, 41100, 41200, 41300, 41400]),
-      memoryDelta: stats([0, 0, 0, 0, 0]),
-      retainedHeap: stats([0, 0, 0, 0, 0]),
       // #7848 invariants: a natural completion preserves the drawing, and N
-      // completions accumulate neither ink nor heap. Values are deliberately
+      // completions accumulate no further ink. Values are deliberately
       // tight because this fixture must read as a *clean* capture; the real
       // spreads are still to be characterized over 5 runs.
       canvasInkCoverage: stats([0.421, 0.419, 0.423, 0.42, 0.422]),
       canvasInkDrift: stats([0.00114, 0.001155, 0.00115, 0.00116, 0.0011525]),
-      retainedHeapSlope: stats([11980, 12100, 12030, 12150, 12080]),
       synthsRetained: stats([0, 0, 0, 0, 0]),
     },
     "ascending-notes-color-spiral.html": {
@@ -123,10 +112,9 @@ function healthyPages(): BaselineData["pages"] {
       blocksExecuted: stats([178, 178, 178, 178, 178]),
     },
     "crabcanon-plot.html": {
-      // The render cells that replaced the retired scheduleLag probes
-      // (~1e-11 ms, below timer resolution, hence constant on unchanged code).
-      stageUpdateTime: stats([8.46, 8.52, 8.49, 8.55, 8.5]),
-      stageUpdateMax: stats([20.02, 20.18, 20.09, 20.24, 20.11]),
+      // The render counters that replaced the retired scheduleLag probes
+      // (~1e-11 ms, below timer resolution, hence constant on unchanged code)
+      // and the per-frame durations that failed baseline validate.
       cacheRebuildCount: stats([242, 245, 244, 243, 246]),
       cacheSkippedCount: stats([687, 687, 687, 687, 687]),
       viewportCulledBlocks: stats([794, 796, 797, 795, 796]),
@@ -264,20 +252,56 @@ describe("validateBaseline", () => {
     expect(result.defects.filter((d) => d.severity === "fail")).toHaveLength(0);
   });
 
-  it("fails captures that do not exercise required transport, refresh, or export paths", () => {
+  it("fails captures that do not exercise the transport seam or the export fast path", () => {
     const pages = healthyPages();
     pages["Frere-Jacques.html"].transportEventCount = stats([268, 0, 268, 268, 268]);
-    pages["RainbowConnection.html"].refreshCanvasCallCount = stats([0, 0, 0, 0, 0]);
     pages["RainbowConnection.html"].maxDepth = stats([1, 1, 1, 1, 1]);
 
     const result = validateBaseline(baseline(pages));
 
     expect(result.ok).toBe(false);
-    for (const metric of ["transportEventCount", "refreshCanvasCallCount", "maxDepth"]) {
+    for (const metric of ["transportEventCount", "maxDepth"]) {
       const defect = findDefect(result, metric, "zero-variance");
       expect(defect?.severity).toBe("fail");
       expect(defect?.detail).toContain("not exercised");
     }
+  });
+
+  it("accepts refreshCanvasCallCount == 0, which is the healthy value", () => {
+    // PR #7923's whole point is that the load stops repainting, so 0 is what a
+    // correct capture records. A "== 0 means never exercised" guard here
+    // rejected baseline run #22 and named the opposite of what had happened.
+    // The generic zero-variance WARN survives — "this probe saw no signal" is
+    // still true and still worth saying — but nothing may fail on it.
+    const pages = healthyPages();
+    pages["RainbowConnection.html"].refreshCanvasCallCount = stats([
+      0, 0, 0, 0, 0,
+    ]);
+    const zeroed = validateBaseline(baseline(pages));
+    const defects = zeroed.defects.filter(
+      (d) =>
+        d.fixture === "RainbowConnection.html" &&
+        d.metric === "refreshCanvasCallCount",
+    );
+    expect(defects.every((d) => d.severity !== "fail")).toBe(true);
+    expect(defects.some((d) => d.detail.includes("not exercised"))).toBe(false);
+    expect(zeroed.ok).toBe(true);
+
+    // And a non-zero count is equally acceptable: the cell is a fingerprint, so
+    // validate's only job on it is to refuse an unexercised capture, not to
+    // demand a particular number.
+    const pages2 = healthyPages();
+    pages2["RainbowConnection.html"].refreshCanvasCallCount = stats([
+      412, 430, 421, 418, 425,
+    ]);
+    const busy = validateBaseline(baseline(pages2));
+    expect(
+      busy.defects.some(
+        (d) =>
+          d.metric === "refreshCanvasCallCount" && d.severity === "fail",
+      ),
+    ).toBe(false);
+    expect(busy.ok).toBe(true);
   });
 
   it("warns rather than fails a spread with no configured limit", () => {
@@ -311,33 +335,33 @@ describe("validateBaseline", () => {
   });
 
   it("does not demand a tight distribution from a probe below timer resolution", () => {
-    // cumulativeDrift is the cell that is genuinely below the resolution floor
-    // in the approved contract: a sub-nanosecond drift cannot be measured by a
-    // millisecond timer, so its p10->p90 span is meaningless as noise. The
-    // scheduleLag probes used to cover this case but left the crabcanon
-    // contract, because on unchanged code they are constant -- below resolution
-    // AND zero variance, which says nothing about a capture either way.
+    // canvasInkDrift is the surviving cell that can sit below the resolution
+    // floor: its whole claim is "repeated runs add no further ink", so a median
+    // of ~1e-11 is the healthy reading and its p10->p90 span is meaningless as
+    // noise. (cumulativeDrift used to cover this case and left the contract for
+    // the same reason; the scheduleLag probes left crabcanon because on
+    // unchanged code they are constant — below resolution AND zero variance,
+    // which says nothing about a capture either way.)
     const pages = healthyPages();
-    pages["Frere-Jacques.html"].cumulativeDrift = stats([
+    pages["musical-tree.html"].canvasInkDrift = stats([
       1e-12, 9e-12, 3e-11, 7e-11, 2.1e-10,
     ]);
     const result = validateBaseline(baseline(pages), {
-      validity: { maxSpreadPct: { cumulativeDrift: 1 } },
+      validity: { maxSpreadPct: { canvasInkDrift: 1 } },
     });
     expect(
-      findDefect(result, "cumulativeDrift", "below-resolution")?.severity,
+      findDefect(result, "canvasInkDrift", "below-resolution")?.severity,
     ).toBe("warn");
-    expect(findDefect(result, "cumulativeDrift", "spread")).toBeUndefined();
-    expect(findDefect(result, "cumulativeDrift", "bimodal")).toBeUndefined();
+    expect(findDefect(result, "canvasInkDrift", "spread")).toBeUndefined();
+    expect(findDefect(result, "canvasInkDrift", "bimodal")).toBeUndefined();
     expect(result.ok).toBe(true);
   });
 
   it("reports a probe that measured nothing as zero-variance, not as a pass", () => {
     const result = validateBaseline(baseline(healthyPages()));
-    expect(findDefect(result, "memoryDelta", "zero-variance")?.severity).toBe(
-      "warn",
-    );
-    expect(findDefect(result, "retainedHeap", "zero-variance")?.severity).toBe(
+    // synthsRetained is the surviving example: a floor whose healthy value is 0,
+    // so the gate can only ever say "this probe saw nothing" — never pass.
+    expect(findDefect(result, "synthsRetained", "zero-variance")?.severity).toBe(
       "warn",
     );
   });
@@ -529,24 +553,19 @@ describe("validateBaseline", () => {
       validity: {
         maxSpreadPct: {
           saveTime: 10,
-          exportMIDITime: 10,
-          saveAsLilypondTime: 10,
           callbackLatencyMax: 10,
           voiceOnsetError: 10,
         },
       },
     });
     expect(result.ok).toBe(true);
-    // Nothing left but the probes that genuinely cannot measure anything. The
-    // four zero-variance cells: memoryDelta, retainedHeap, and the two
-    // synthsRetained cells. The one below-resolution cell is cumulativeDrift.
-    // The crabcanon scheduleLag probes used to be the other two; they left the
-    // contract because on unchanged code they are constant, which is zero
-    // variance rather than a below-resolution reading.
+    // Nothing left but the cells whose healthy value is a floor. The
+    // synthsRetained floor on two fixtures, plus refreshCanvasCallCount, whose
+    // healthy value is 0 for the same reason (#7923 stops the load repainting).
+    // Every one of these is a WARN: the gate says "this probe sees no
+    // movement", never "this capture is untrustworthy".
     expect(result.defects.map((d) => `${d.metric}:${d.kind}`).sort()).toEqual([
-      "cumulativeDrift:below-resolution",
-      "memoryDelta:zero-variance",
-      "retainedHeap:zero-variance",
+      "refreshCanvasCallCount:zero-variance",
       "synthsRetained:zero-variance",
       "synthsRetained:zero-variance",
     ]);
