@@ -148,8 +148,14 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // synthsRetained is PR #7832's fingerprint; it is exact too but not
     // required, because the healthy value is 0 and that is also what a
     // collector failure would produce.
-    // The four timing cells stay warn-only: their CI variance is not yet
+    // The three timing cells stay warn-only: their CI variance is not yet
     // characterized, so they can warn but must not post a hard REGRESSION.
+    // Note that warnOnly does NOT soften a spread breach: validate.ts emits
+    // severity 'fail' for spread > maxSpreadPct without consulting
+    // isMetricWarnOnly. Two of these three already measure over their limit on
+    // unchanged code -- callbackLatencyMean 7.05% against 5%, voiceOnsetError
+    // 13.02% against 10% -- so they are expected to fail baseline validate
+    // until they leave the contract or their instability is explained.
     warnOnly: [
       "callbackLatencyMean",
       "callbackLatencyMax",
@@ -215,9 +221,11 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     //
     // scheduleLagMean/scheduleLagMax were removed from this fixture: at
     // ~1e-11 ms they sit below timer resolution, so they are constant on
-    // unchanged code and cannot serve as a reference distribution. The
-    // contract drops them; driver.ts still collects them (they are requested in
-    // perfsense.config.json) so the continuity read survives in the raw results.
+    // unchanged code and cannot serve as a reference distribution. Note that
+    // being listed in perfsense.config.json is not enough to keep a reading:
+    // driver.ts filters plugins through isMetricApproved before setup, so an
+    // unapproved metric never runs a collector and never appears in the raw
+    // results. It surfaces only as a skippedPluginNames line on the console.
     //
     // The render cells are PR #7738's coverage and PR #7815's cost.
     // viewportCulledBlocks / viewportCulledFraction are the direct state read
