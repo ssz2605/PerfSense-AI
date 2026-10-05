@@ -46,6 +46,10 @@ describe('baseline save contract', () => {
             executionTime: 60000 + i,
             maxActionDepth: 25,
             projectLoadTime: 1800 + i,
+            // Required for #7703. Save refuses to write a baseline without
+            // them, so a capture that declares this page must carry them.
+            transportEventRatio: 0.0253,
+            transportEventCount: 268,
           },
         })),
       },
@@ -57,7 +61,9 @@ describe('baseline save contract', () => {
             // Approved render cells (#7738/#7815).
             stageUpdateTime: 8.4 + i * 0.1,
             viewportCulledBlocks: 794 + i,
+            viewportCulledFraction: 0.855,
             cacheRebuildCount: 243 + i,
+            cacheSkippedCount: 656,
             // Retired as constant-on-unchanged-code; must be dropped at save time.
             scheduleLagMean: 12 + i,
             scheduleLagMax: 40 + i,
@@ -103,13 +109,17 @@ describe('baseline save contract', () => {
     expect(Object.keys(baseline.pages['Frere-Jacques.html']).sort()).toEqual([
       'callbackLatencyMax',
       'callbackLatencyMean',
+      'transportEventCount',
+      'transportEventRatio',
     ]);
     // scheduleLagMean/scheduleLagMax left the crabcanon contract and
     // stageUpdateTime/stageUpdateMax followed them, so all three are dropped
     // even though the raw run collected them.
     expect(Object.keys(baseline.pages['crabcanon-plot.html']).sort()).toEqual([
       'cacheRebuildCount',
+      'cacheSkippedCount',
       'viewportCulledBlocks',
+      'viewportCulledFraction',
     ]);
     // maxActionDepth never appears in the baseline.
     expect(JSON.stringify(baseline)).not.toContain('maxActionDepth');
@@ -129,6 +139,9 @@ describe('baseline save contract', () => {
             // Approved: peak heap across the export pass, part of Rainbow's
             // export class.
             peakHeapDuringExport: FIVE_RUNS[i] + 400,
+            // Required for #7923 and #7970; save refuses to write without them.
+            refreshCanvasCallCount: 0,
+            maxDepth: 100,
           },
         })),
       },
@@ -158,5 +171,61 @@ describe('baseline save contract', () => {
     // memoryDelta is not approved for any fixture any more, so the decoy value
     // must be rejected at baseline-save time.
     expect(baseline.pages['RainbowConnection.html'].memoryDelta).toBeUndefined();
+  });
+
+  it('refuses to save when a required cell has no numeric sample', () => {
+    // The regression this gate exists for: cacheRebuildCount and
+    // viewportCulledBlocks were approved, required and collected, yet absent
+    // from the v2 baseline because the save-time filter drops any metric with
+    // no values. Save must now fail loudly instead of writing the hole.
+    writeResults([
+      {
+        page: 'crabcanon-plot.html',
+        runs: Array.from({ length: 5 }, (_, i) => ({
+          run: i + 1,
+          metrics: {
+            cacheSkippedCount: 656,
+            viewportCulledFraction: 0.855,
+            // Both required cells read null on every run.
+            cacheRebuildCount: null,
+            viewportCulledBlocks: null,
+          },
+        })),
+      },
+    ]);
+
+    const errors: string[] = [];
+    const realError = console.error;
+    console.error = (msg?: unknown) => {
+      errors.push(String(msg ?? ''));
+    };
+    // Throw on exit, because a stub that merely returns would let execution run
+    // past the gate and write the file the gate exists to prevent.
+    class ExitCalled extends Error {
+      constructor(readonly code: number) {
+        super(`process.exit(${code})`);
+      }
+    }
+    const realExit = process.exit;
+    process.exit = ((code?: number) => {
+      throw new ExitCalled(code ?? 0);
+    }) as typeof process.exit;
+    try {
+      save(['--from', fromFile, '--out', outFile]);
+      throw new Error('save() returned without exiting');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExitCalled);
+      expect((err as ExitCalled).code).toBe(1);
+    } finally {
+      console.error = realError;
+      process.exit = realExit;
+    }
+
+    // It must name every missing cell, not just the first.
+    const said = errors.join('\n');
+    expect(said).toContain('crabcanon-plot.html/cacheRebuildCount');
+    expect(said).toContain('crabcanon-plot.html/viewportCulledBlocks');
+    // And it must not leave a half-written baseline behind.
+    expect(fs.existsSync(outFile)).toBe(false);
   });
 });

@@ -4,6 +4,7 @@ import type { PageResult, BaselineData, BaselineMetricStatsV2, StabilityTier } f
 import { median, percentile, mean, stdDev, mad, coefficientOfVariation, stabilityTier } from '@perfsense/statistics';
 import { isKnownFixture, isMetricApproved } from '@perfsense/benchmark-matrix';
 import { computeEnvironmentFingerprint, resolveBaselineHarness } from './env';
+import { findRequiredFailures } from './requiredMetrics';
 import { runValidate } from './validate';
 
 function printUsage(): void {
@@ -123,6 +124,29 @@ export function save(argv: string[]): void {
     }
 
     pages[pageResult.page] = pageMetrics;
+  }
+
+  // A required fingerprint proves an optimization is still wired only if it was
+  // actually measured. Saving a baseline that silently omits a required cell is
+  // how two exact+required cells (cacheRebuildCount, viewportCulledBlocks) came
+  // to be missing from a green baseline: the save-time filter drops any metric
+  // with no numeric sample, and nothing downstream insisted they were present.
+  // Scope the check to the fixtures this capture actually contains, so a
+  // deliberate single-fixture capture is not failed for the other five.
+  const capturedFixtures = Object.keys(pages);
+  const requiredFailures = findRequiredFailures(results, capturedFixtures);
+  if (requiredFailures.length > 0) {
+    console.error(
+      `ERROR: refusing to save a baseline with ${requiredFailures.length} required cell(s) missing:`,
+    );
+    for (const failure of requiredFailures) {
+      console.error(`  REQUIRED MISSING (${failure.fixture}/${failure.metric}): ${failure.reason}`);
+    }
+    console.error(
+      '  A required fingerprint with no numeric sample proves nothing. Fix the collector or the\n' +
+        '  config.metrics list so the cell is collected, then re-run the capture.',
+    );
+    process.exit(1);
   }
 
   const now = new Date();

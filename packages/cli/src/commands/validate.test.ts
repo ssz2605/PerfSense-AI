@@ -569,10 +569,15 @@ describe("validateBaseline", () => {
     // Nothing left but the cells whose healthy value is a floor. The
     // synthsRetained floor on two fixtures, plus refreshCanvasCallCount, whose
     // healthy value is 0 for the same reason (#7923 stops the load repainting).
+    // The two restored export cells appear as missing-metric because this
+    // fixture's capture does not carry them; that is a WARN telling the
+    // baseline needs a re-capture, not a claim the capture is untrustworthy.
     // Every one of these is a WARN: the gate says "this probe sees no
     // movement", never "this capture is untrustworthy".
     expect(result.defects.map((d) => `${d.metric}:${d.kind}`).sort()).toEqual([
+      "exportMIDITime:missing-metric",
       "refreshCanvasCallCount:zero-variance",
+      "saveAsLilypondTime:missing-metric",
       "synthsRetained:zero-variance",
       "synthsRetained:zero-variance",
     ]);

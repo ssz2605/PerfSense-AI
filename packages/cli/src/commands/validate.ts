@@ -7,7 +7,7 @@ import type {
   ValidityConfig,
 } from '@perfsense/core';
 import { median } from '@perfsense/statistics';
-import { BENCHMARK_MATRIX, isMetricApproved, getMetricUnit } from '@perfsense/benchmark-matrix';
+import { BENCHMARK_MATRIX, isMetricApproved, getMetricUnit, getFixtureContract } from '@perfsense/benchmark-matrix';
 import { environmentsMatch } from './env';
 import { loadConfig } from './report';
 
@@ -521,6 +521,55 @@ export function runValidate(argv: string[]): number {
 
   const config = loadConfig(configPath);
   const validity = validateBaseline(baseline, { previous, validity: config?.validity });
+
+  // Required fingerprint cells must be present in the baseline file itself.
+  // Save already refuses to write one without them, but a baseline produced
+  // before that gate existed (or edited by hand) can still be missing them, and
+  // validate is the last step before the file is committed. Reuse the same
+  // predicate so the two commands cannot disagree.
+  const baselinePages = Object.entries(baseline.pages ?? {});
+  const requiredMissing: { fixture: string; metric: string }[] = [];
+  for (const [pageName, metrics] of baselinePages) {
+    const contract = getFixtureContract(pageName);
+    if (!contract || !contract.requiredMetrics) continue;
+    for (const metric of contract.requiredMetrics) {
+      const cell = (metrics as Record<string, unknown>)[metric];
+      const hasValue =
+        cell !== undefined &&
+        cell !== null &&
+        typeof (cell as { values?: unknown }).values === 'object' &&
+        Array.isArray((cell as { values?: unknown }).values) &&
+        (cell as { values: unknown[] }).values.some((v) => typeof v === 'number' && Number.isFinite(v));
+      if (!hasValue) requiredMissing.push({ fixture: pageName, metric });
+    }
+  }
+
+  if (requiredMissing.length > 0) {
+    console.error(
+      `Baseline is missing ${requiredMissing.length} required fingerprint cell(s):`,
+    );
+    for (const miss of requiredMissing) {
+      console.error(`  REQUIRED MISSING (${miss.fixture}/${miss.metric})`);
+    }
+    console.error(
+      '  These cells prove a merged optimization was measured. Without them the\n' +
+        '  baseline cannot certify those code paths.',
+    );
+    if (formatJson) {
+      console.log(
+        JSON.stringify(
+          {
+            ...validity,
+            ok: false,
+            requiredMissing: requiredMissing.map((m) => `${m.fixture}/${m.metric}`),
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return 1;
+  }
 
   if (formatJson) {
     console.log(JSON.stringify(validity, null, 2));
