@@ -682,11 +682,13 @@ describe("report required fingerprint cells", () => {
     };
     try {
       const report = await reportJson(baselineFile, currentFile);
-      // 4 fixtures × their required metrics (2 + 2 + 3 + 4 = 11).
+      // 4 fixtures - their required metrics (2 + 2 + 2 + 4 = 10). musical-tree's
+      // synthsRetained is no longer required (its baseline of 1 means cleanup
+      // never completed there; Frere is the #7832 guard), so the count is 10.
       // No reference exists, therefore these are loud NO_BASELINE rows, never
       // fabricated CHANGED findings.
       expect(report.check.summary.changed).toBe(0);
-      expect(report.check.summary.noBaseline).toBe(11);
+      expect(report.check.summary.noBaseline).toBe(10);
       expect(report.check.summary.captureNeeded).toBe(true);
       expect(report.check.summary.failed).toBe(true);
       expect(stderr).toContain("fingerprint cell");

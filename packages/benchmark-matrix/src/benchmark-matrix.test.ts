@@ -43,12 +43,15 @@ describe("Benchmark Matrix contract", () => {
       "initTotal",
       "heapAfterBoot",
     ]);
-    // Rainbow keeps only the cells that move when a merged perf PR is reverted
-    // (refreshCanvasCallCount for #7923, maxDepth for #7970) plus the two load
-    // timings. The export timings and the stage/cache counters are gone.
+    // Rainbow keeps the cells that move when a merged perf PR is reverted
+    // (refreshCanvasCallCount for #7923, maxDepth for #7970) plus the load
+    // timings. exportMIDITime and saveAsLilypondTime are restored as warn-only
+    // defence-in-depth for #7970; the stage/cache counters stay gone.
     expect(getApprovedMetrics("RainbowConnection.html")).toEqual([
       "projectLoadTime",
       "saveTime",
+      "exportMIDITime",
+      "saveAsLilypondTime",
       "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
@@ -97,18 +100,19 @@ describe("Benchmark Matrix contract", () => {
     }
     expect(counts).toEqual({
       "index.html": 3,
-      "RainbowConnection.html": 5,
+      "RainbowConnection.html": 7,
       "Frere-Jacques.html": 6,
       "musical-tree.html": 4,
       "ascending-notes-color-spiral.html": 2,
       "crabcanon-plot.html": 5,
     });
-    // 25 cells total, down from 39 before the 2026-10 cleanup.
+    // 27 cells total: 39 before the 2026-10 cleanup, 25 after it, plus the two
+    // Rainbow export timings restored as warn-only for #7970.
     const total = BENCHMARK_MATRIX.reduce(
       (sum, c) => sum + c.metrics.length,
       0,
     );
-    expect(total).toBe(25);
+    expect(total).toBe(27);
     // bootstrapTotal survives: it is the one cell that measures the repo rather
     // than a single PR, and it is the fixture that proves the harness is honest.
     expect(isMetricApproved("index.html", "bootstrapTotal")).toBe(true);
@@ -119,9 +123,10 @@ describe("Benchmark Matrix contract", () => {
     // to gate on. cacheRebuildCount and viewportCulledBlocks stay on
     // crabcanon-plot, which is the fixture those two PRs were measured on: they
     // are its fingerprints, and Rainbow only ever borrowed them.
+    // exportMIDITime and saveAsLilypondTime are deliberately NOT listed below: they
+    // were restored to Rainbow as warn-only cells for #7970. Every other name in
+    // this table is still retired everywhere.
     const retired: Record<string, string[]> = {
-      exportMIDITime: [],
-      saveAsLilypondTime: [],
       stageUpdateCallCount: [],
       stageUpdateTime: [],
       stageUpdateMax: [],
@@ -225,11 +230,22 @@ describe("Benchmark Matrix contract", () => {
   });
 
   it("is case-insensitive for fixture and metric names", () => {
-    expect(isMetricApproved("rainbowconnection.html", "EXPORTMITITIME")).toBe(
+    // Still-retired names must stay unapproved in any casing.
+    expect(isMetricApproved("rainbowconnection.html", "STAGEUPDATECALLCOUNT")).toBe(
       false,
     );
+    expect(isMetricApproved("rainbowconnection.html", "RETAINEDHEAP")).toBe(false);
+    // The two restored export cells are approved on Rainbow, so they exercise
+    // the true branch of the same lookup. Note the exact spelling: these
+    // uppercase probes used to read "EXPORTMITITIME", which lowercases to
+    // "exportmititime" and so matched nothing. They passed for the wrong
+    // reason; these are genuine case-insensitive lookups.
+    expect(isMetricApproved("rainbowconnection.html", "EXPORTMIDITIME")).toBe(true);
     expect(isMetricApproved("rainbowconnection.html", "SAVEASLILYPONDTIME")).toBe(
-      false,
+      true,
+    );
+    expect(isMetricApproved("CRABCANON-PLOT.HTML", "VIEWPORTCULLEDBLOCKS")).toBe(
+      true,
     );
     expect(
       isMetricApproved("rainbowconnection.html", "PEAKHEAPDURINGEXPORT"),

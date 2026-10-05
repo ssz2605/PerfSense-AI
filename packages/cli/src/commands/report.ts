@@ -31,6 +31,7 @@ import {
   getExactTolerance,
   isMetricRequired,
   getFixtureContract,
+  getFingerprintExplanation,
 } from "@perfsense/benchmark-matrix";
 import {
   generatePRComment,
@@ -379,9 +380,21 @@ export async function run(argv: string[]): Promise<boolean> {
           envMatched,
           baselineAgeDays: ageDays,
           note: cls.changed
-            ? `exact check: baseline ${baselineMedian} vs current ${currentMedian} ` +
-              `(Δ ${cls.absDelta >= 0 ? "+" : ""}${cls.absDelta}, tolerance ${tolerance}) — ` +
-              "fingerprint moved, the optimized code path likely changed"
+            ? (() => {
+                const base =
+                  `exact check: baseline ${baselineMedian} vs current ${currentMedian} ` +
+                  `(Δ ${cls.absDelta >= 0 ? "+" : ""}${cls.absDelta}, tolerance ${tolerance}) — ` +
+                  "fingerprint moved, the optimized code path likely changed";
+                // Static explanation layer: which merged PR this cell witnesses,
+                // where that PR lives, and what the movement means. Declared
+                // beside the contract, so no model is involved.
+                const why = getFingerprintExplanation(metric);
+                return why
+                  ? `${base}\n      PR #${why.pr}: ${why.optimization}\n` +
+                      `      path: ${why.locations}\n` +
+                      `      means: ${why.meaning}`
+                  : base;
+              })()
             : null,
         };
         allResults.push(entry);

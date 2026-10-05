@@ -81,15 +81,23 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // raises execution depth 1 -> 100, and driver.ts filters unapproved metrics
     // at the collection boundary, so it was not being measured at all.
     //
-    // Removed (2026-10): exportMIDITime, saveAsLilypondTime, stageUpdateCallCount,
-    // stageUpdateTime, stageUpdateMax, cacheRebuildCount, viewportCulledBlocks.
-    // None of them is a witness for any merged perf PR on this fixture, and a
-    // cell that only ever reports NO_BASELINE or a warn-only delta is a row a
-    // reviewer learns to skip. The two that stay are the ones whose value
-    // CHANGES when the optimized path is reverted.
+    // Removed (2026-10): stageUpdateCallCount, stageUpdateTime, stageUpdateMax,
+    // cacheRebuildCount, viewportCulledBlocks. None of them is a witness for any
+    // merged perf PR on this fixture, and a cell that only ever reports
+    // NO_BASELINE or a warn-only delta is a row a reviewer learns to skip. The
+    // exact cells that stay are the ones whose value CHANGES when the optimized
+    // path is reverted.
+    //
+    // exportMIDITime and saveAsLilypondTime are restored as warn-only timing
+    // cells for PR #7970's fast-run export path. They are defence-in-depth:
+    // maxDepth (exact, required) is the deterministic witness for that PR, and
+    // these two say whether the ~23x is still visible in milliseconds.
+    // #7970 effect ~23x; run #22 spreads 13.28%/11.49%; 20% cannot hide it
     metrics: [
       "projectLoadTime",
       "saveTime",
+      "exportMIDITime",
+      "saveAsLilypondTime",
       "refreshCanvasCallCount",
       "peakHeapDuringExport",
       "maxDepth",
@@ -99,9 +107,11 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // deterministic values for both, and reverting either PR moves its cell.
     exactMetrics: ["refreshCanvasCallCount", "maxDepth"],
     requiredMetrics: ["refreshCanvasCallCount", "maxDepth"],
-    // Nothing on this fixture is warn-only any more: every remaining cell is
-    // either an exact fingerprint or a timing metric with a real threshold.
-    warnOnly: [],
+    // The two restored export cells are warn-only: their CI spread is a timing
+    // distribution, so a delta is reported but never fails the run on its own.
+    // Every other cell here is either an exact fingerprint or a timing metric
+    // with a real threshold.
+    warnOnly: ["exportMIDITime", "saveAsLilypondTime"],
   },
   {
     fixture: "Frere-Jacques.html",
@@ -195,11 +205,13 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       canvasInkCoverage: 0.0001,
       canvasInkDrift: 0.000001,
     },
-    requiredMetrics: [
-      "canvasInkCoverage",
-      "canvasInkDrift",
-      "synthsRetained",
-    ],
+    // synthsRetained is NOT required here: baseline 1 = cleanup not completed
+    // here; Frere is the #7832 guard. Its baseline value is already the
+    // unhealthy reading, so reverting _cleanupAfterCompletion would leave this
+    // cell at 1 — unchanged, and therefore undetectable. Keeping it in
+    // requiredMetrics would imply coverage it cannot provide. It stays an exact
+    // cell so a change in either direction is still reported.
+    requiredMetrics: ["canvasInkCoverage", "canvasInkDrift"],
     // Memory is gone from this fixture entirely, so there is nothing left to
     // cap: the two remaining timing metrics carry real thresholds.
     warnOnly: [],
@@ -381,6 +393,131 @@ export function getExactTolerance(fixture: string, metric: string): number {
     (k) => k.toLowerCase() === metric.toLowerCase(),
   );
   return match !== undefined ? table[match] : DEFAULT_EXACT_TOLERANCE;
+}
+
+/**
+ * Why a fingerprint cell exists, in plain terms, with no model involved.
+ *
+ * When an exact cell reads CHANGED the report has to say which merged
+ * optimization is now suspect and where it lives. That mapping is a fixed fact
+ * about the code, not something to infer at report time, so it is declared here
+ * beside the contract and looked up by metric name.
+ */
+export interface FingerprintExplanation {
+  /** The merged perf PR this cell witnesses. */
+  pr: number;
+  /** One line naming the optimization. */
+  optimization: string;
+  /** Files and functions on the optimized path. */
+  locations: string;
+  /** What a change in this cell means for the PR. */
+  meaning: string;
+}
+
+export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = {
+  transportEventCount: {
+    pr: 7703,
+    optimization: "Note delays scheduled on Tone.Transport instead of setTimeout",
+    locations: "js/logo.js runFromBlockNow delay branch (~1820-1856)",
+    meaning:
+      "Fell toward 0 means delays reverted to setTimeout, i.e. audio scheduling now " +
+      "drifts against the render loop.",
+  },
+  transportEventRatio: {
+    pr: 7703,
+    optimization: "Share of note delays that use Tone.Transport rather than setTimeout",
+    locations: "js/logo.js runFromBlockNow delay branch (~1820-1856)",
+    meaning:
+      "Fell toward 0 means the transport gate stopped passing. Read as a seam " +
+      "liveness signal against the baseline share, not against 1.0: a page " +
+      "with no running transport clock also reads 0.",
+  },
+  synthsRetained: {
+    pr: 7832,
+    optimization: "Instruments disposed on natural completion",
+    locations: "js/logo.js _cleanupAfterCompletion (~1238-1301)",
+    meaning:
+      "Above 0 means instruments survived completion, i.e. cleanup did not run. " +
+      "Frere-Jacques is the guard; musical-tree's baseline is already 1.",
+  },
+  canvasInkCoverage: {
+    pr: 7848,
+    optimization: "Natural completion keeps the drawing instead of clearing the canvas",
+    locations: "js/logo.js cleanup path, without the doClear on stop",
+    meaning:
+      "Toward 0 means the canvas is being cleared at completion, i.e. cleanup was " +
+      "re-wired to the visual reset.",
+  },
+  canvasInkDrift: {
+    pr: 7848,
+    optimization: "Repeated completions do not accumulate canvas ink",
+    locations: "js/logo.js cleanup path, without the doClear on stop",
+    meaning:
+      "Above baseline means each completion is adding ink, i.e. drawing is " +
+      "accumulating rather than being preserved.",
+  },
+  viewportCulledBlocks: {
+    pr: 7738,
+    optimization: "Off-screen blocks culled from the display list",
+    locations: "js/blocks.js _updateViewportCulling (~7125)",
+    meaning:
+      "0 for the whole pan means culling stopped working, or the pan itself did " +
+      "not happen. viewportCulledFraction separates the two cases.",
+  },
+  viewportCulledFraction: {
+    pr: 7738,
+    optimization: "Fraction of the workspace hidden by the viewport culler at peak",
+    locations: "js/blocks.js _updateViewportCulling (~7125)",
+    meaning:
+      "Toward 0 means the culler stopped hiding blocks, i.e. the optimization " +
+      "was reverted or its viewport test is failing.",
+  },
+  cacheRebuildCount: {
+    pr: 7815,
+    optimization: "Off-screen blocks skip the per-block bitmap cache rebuild",
+    locations:
+      "js/block.js Block.highlight (~718) and Block.unhighlight (~802); " +
+      "js/logo.js markStageDirty guard (~2046)",
+    meaning:
+      "Rose above baseline means updateCache is running for off-screen blocks " +
+      "again, i.e. the _viewportVisible guard was removed.",
+  },
+  cacheSkippedCount: {
+    pr: 7815,
+    optimization: "Count of swept blocks whose cache rebuild was skipped",
+    locations:
+      "js/block.js Block.highlight (~718) and Block.unhighlight (~802); " +
+      "js/logo.js markStageDirty guard (~2046)",
+    meaning:
+      "Fell toward 0 means off-screen blocks are rebuilding their caches again, " +
+      "i.e. the #7815 guard was reverted.",
+  },
+  refreshCanvasCallCount: {
+    pr: 7923,
+    optimization: "refreshCanvas() suppressed during project load",
+    locations: "js/activity.js _suppressRefresh guard in refreshCanvas (~2152-2159)",
+    meaning:
+      "Rose into the hundreds means the load is repainting between decode stages " +
+      "again, i.e. the guard was removed. A healthy build records 0.",
+  },
+  maxDepth: {
+    pr: 7970,
+    optimization: "Headless export fast-run: yields every 100 transitions",
+    locations: "js/logo.js _exportingNotation execution-depth cap",
+    meaning:
+      "Below 100 means the fast-run depth cap was reverted, i.e. the export is " +
+      "back to one action at a time. Reads null when no execution is observed.",
+  },
+};
+
+/**
+ * Look up the static explanation for a fingerprint cell, if one is declared.
+ */
+export function getFingerprintExplanation(metric: string): FingerprintExplanation | undefined {
+  const match = Object.keys(FINGERPRINT_EXPLANATIONS).find(
+    (k) => k.toLowerCase() === metric.toLowerCase(),
+  );
+  return match !== undefined ? FINGERPRINT_EXPLANATIONS[match] : undefined;
 }
 
 /**
