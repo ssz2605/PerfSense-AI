@@ -109,7 +109,7 @@ function buildCompleteCurrentResults(): PageResult[] {
         },
       })),
     },
-    // Frere-Jacques: requiredMetrics = [transportEventRatio, transportEventCount]
+    // Frere-Jacques: requiredMetrics = [transportEventRatio, transportEventCount, synthsRetained]
     {
       page: "Frere-Jacques.html",
       runs: [0, 1, 2, 3, 4].map((i) => ({
@@ -146,7 +146,8 @@ function buildCompleteCurrentResults(): PageResult[] {
         },
       })),
     },
-    // musical-tree: requiredMetrics = [canvasInkCoverage, canvasInkDrift, synthsRetained]
+    // musical-tree: requiredMetrics = [canvasInkCoverage, canvasInkDrift] (synthsRetained
+// present but NOT required: its baseline is 1)
     {
       page: "musical-tree.html",
       runs: [0, 1, 2, 3, 4].map((i) => ({
@@ -682,13 +683,14 @@ describe("report required fingerprint cells", () => {
     };
     try {
       const report = await reportJson(baselineFile, currentFile);
-      // 4 fixtures - their required metrics (2 + 2 + 2 + 4 = 10). musical-tree's
-      // synthsRetained is no longer required (its baseline of 1 means cleanup
-      // never completed there; Frere is the #7832 guard), so the count is 10.
+      // 4 fixtures - their required metrics (2 + 3 + 2 + 4 = 11). Frere's
+      // synthsRetained is required (it is the #7832 guard, healthy value 0);
+      // musical-tree's copy is not, because its baseline of 1 means cleanup
+      // never completed there and it could not detect a revert either way.
       // No reference exists, therefore these are loud NO_BASELINE rows, never
       // fabricated CHANGED findings.
       expect(report.check.summary.changed).toBe(0);
-      expect(report.check.summary.noBaseline).toBe(10);
+      expect(report.check.summary.noBaseline).toBe(11);
       expect(report.check.summary.captureNeeded).toBe(true);
       expect(report.check.summary.failed).toBe(true);
       expect(stderr).toContain("fingerprint cell");

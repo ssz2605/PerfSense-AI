@@ -19,6 +19,9 @@ describe("findRequiredFailures", () => {
       result("Frere-Jacques.html", {
         transportEventRatio: 0.0253,
         transportEventCount: 268,
+        // Required since Frere's synthsRetained was promoted: it is the #7832
+        // guard and its healthy value is 0, so absence must fail.
+        synthsRetained: 0,
       }),
       result("crabcanon-plot.html", {
         cacheRebuildCount: 3,

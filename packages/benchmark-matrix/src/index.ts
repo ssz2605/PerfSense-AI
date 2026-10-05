@@ -154,10 +154,12 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     exactTolerance: { transportEventRatio: 0.0001 },
     // Required: these cells exist to prove the seam is still wired, so a null
     // reading is a broken collector, not an unchanged build.
-    requiredMetrics: ["transportEventRatio", "transportEventCount"],
-    // synthsRetained is PR #7832's fingerprint; it is exact too but not
-    // required, because the healthy value is 0 and that is also what a
-    // collector failure would produce.
+    // synthsRetained is Frere's #7832 guard and is required for the same
+    // reason: the healthy value is 0, so a missing or null cell is a broken
+    // collector, not an unchanged build. (musical-tree's copy is NOT required
+    // -- its baseline is 1, i.e. cleanup never completed on that fixture, so it
+    // could not detect a revert either way.)
+    requiredMetrics: ["transportEventRatio", "transportEventCount", "synthsRetained"],
     // The three timing cells stay warn-only: their CI variance is not yet
     // characterized, so they can warn but must not post a hard REGRESSION.
     // Note that warnOnly does NOT soften a spread breach: validate.ts emits
@@ -418,7 +420,9 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   transportEventCount: {
     pr: 7703,
     optimization: "Note delays scheduled on Tone.Transport instead of setTimeout",
-    locations: "js/logo.js runFromBlockNow delay branch (~1820-1856)",
+    locations:
+      "js/logo.js runFromBlockNow, delay branch: transport.schedule at " +
+      "~1832 (gate begins ~1814 at the TURTLESTEP check)",
     meaning:
       "Fell toward 0 means delays reverted to setTimeout, i.e. audio scheduling now " +
       "drifts against the render loop.",
@@ -426,7 +430,9 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   transportEventRatio: {
     pr: 7703,
     optimization: "Share of note delays that use Tone.Transport rather than setTimeout",
-    locations: "js/logo.js runFromBlockNow delay branch (~1820-1856)",
+    locations:
+      "js/logo.js runFromBlockNow, delay branch: transport.schedule at " +
+      "~1832 (gate begins ~1814 at the TURTLESTEP check)",
     meaning:
       "Fell toward 0 means the transport gate stopped passing. Read as a seam " +
       "liveness signal against the baseline share, not against 1.0: a page " +
@@ -435,15 +441,22 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   synthsRetained: {
     pr: 7832,
     optimization: "Instruments disposed on natural completion",
-    locations: "js/logo.js _cleanupAfterCompletion (~1238-1301)",
+    locations:
+      "js/logo.js _cleanupAfterCompletion (~1238-1301): stopSound per " +
+      "instrument (~1259-1265) then disposeAllInstruments (~1292)",
     meaning:
       "Above 0 means instruments survived completion, i.e. cleanup did not run. " +
-      "Frere-Jacques is the guard; musical-tree's baseline is already 1.",
+      "Frere-Jacques is the guard and its baseline is 0; musical-tree's baseline " +
+      "is already 1, so it cannot detect a revert.",
   },
   canvasInkCoverage: {
     pr: 7848,
     optimization: "Natural completion keeps the drawing instead of clearing the canvas",
-    locations: "js/logo.js cleanup path, without the doClear on stop",
+    locations:
+      "js/logo.js _cleanupAfterCompletion (~1238-1301) never calls Painter " +
+      "doClear; the clear lives in doStopTurtles (~1309+) and in " +
+      "js/activity.js doClear sites (~815, ~1776) via " +
+      "js/turtle-painter.js doClear (~1345)",
     meaning:
       "Toward 0 means the canvas is being cleared at completion, i.e. cleanup was " +
       "re-wired to the visual reset.",
@@ -451,7 +464,11 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   canvasInkDrift: {
     pr: 7848,
     optimization: "Repeated completions do not accumulate canvas ink",
-    locations: "js/logo.js cleanup path, without the doClear on stop",
+    locations:
+      "js/logo.js _cleanupAfterCompletion (~1238-1301) never calls Painter " +
+      "doClear; the clear lives in doStopTurtles (~1309+) and in " +
+      "js/activity.js doClear sites (~815, ~1776) via " +
+      "js/turtle-painter.js doClear (~1345)",
     meaning:
       "Above baseline means each completion is adding ink, i.e. drawing is " +
       "accumulating rather than being preserved.",
@@ -476,8 +493,9 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
     pr: 7815,
     optimization: "Off-screen blocks skip the per-block bitmap cache rebuild",
     locations:
-      "js/block.js Block.highlight (~718) and Block.unhighlight (~802); " +
-      "js/logo.js markStageDirty guard (~2046)",
+      "js/block.js _viewportVisible !== false guards around updateCache " +
+      "(~718-719 highlight, ~802-803 unhighlight); " +
+      "js/logo.js runFromBlockNow markStageDirty guard (~2046)",
     meaning:
       "Rose above baseline means updateCache is running for off-screen blocks " +
       "again, i.e. the _viewportVisible guard was removed.",
@@ -486,8 +504,9 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
     pr: 7815,
     optimization: "Count of swept blocks whose cache rebuild was skipped",
     locations:
-      "js/block.js Block.highlight (~718) and Block.unhighlight (~802); " +
-      "js/logo.js markStageDirty guard (~2046)",
+      "js/block.js _viewportVisible !== false guards around updateCache " +
+      "(~718-719 highlight, ~802-803 unhighlight); " +
+      "js/logo.js runFromBlockNow markStageDirty guard (~2046)",
     meaning:
       "Fell toward 0 means off-screen blocks are rebuilding their caches again, " +
       "i.e. the #7815 guard was reverted.",
@@ -495,7 +514,11 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   refreshCanvasCallCount: {
     pr: 7923,
     optimization: "refreshCanvas() suppressed during project load",
-    locations: "js/activity.js _suppressRefresh guard in refreshCanvas (~2152-2159)",
+    locations:
+      "js/activity.js refreshCanvas guard: `if (this._suppressRefresh) return;` " +
+      "(~2155, declared ~2152). Set true in js/blocks.js _loadNewBlocksNow " +
+      "(~4861); reset false in its error paths (~4987, ~5537, ~5556) and in " +
+      "cleanupAfterLoad's finally (~6511), which then calls refreshCanvas()",
     meaning:
       "Rose into the hundreds means the load is repainting between decode stages " +
       "again, i.e. the guard was removed. A healthy build records 0.",
@@ -503,9 +526,12 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
   maxDepth: {
     pr: 7970,
     optimization: "Headless export fast-run: yields every 100 transitions",
-    locations: "js/logo.js _exportingNotation execution-depth cap",
+    locations:
+      "js/logo.js runFromBlock export fast path, gated on the " +
+      "_exportingNotation getter (~1754-1756), yielding at " +
+      "_EXPORT_YIELD_AFTER_SYNC_RUNS = 100 (~333) via ~1784-1797",
     meaning:
-      "Below 100 means the fast-run depth cap was reverted, i.e. the export is " +
+      "Below 100 means the fast-run yield was reverted, i.e. the export is " +
       "back to one action at a time. Reads null when no execution is observed.",
   },
 };

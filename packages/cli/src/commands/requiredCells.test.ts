@@ -54,8 +54,8 @@ describe("required fingerprint contract", () => {
       "canvasInkCoverage",
       "canvasInkDrift",
     ]);
-    // Frere's copy is the one that must stay required.
-    expect(isMetricRequired("Frere-Jacques.html", "synthsRetained")).toBe(false);
+    // Frere's copy IS required: healthy value 0, and a missing cell must fail.
+    expect(isMetricRequired("Frere-Jacques.html", "synthsRetained")).toBe(true);
   });
 
   it("keeps Frere's transport fingerprints required", () => {
@@ -75,7 +75,7 @@ describe("required fingerprint contract", () => {
     }
   });
 
-  it("has a required cell for six of the seven PRs, and records why #7832 has none", () => {
+  it("has a required cell for every one of the seven merged perf PRs", () => {
     const required = new Set<string>();
     for (const contract of BENCHMARK_MATRIX) {
       for (const metric of contract.requiredMetrics ?? []) {
@@ -83,24 +83,29 @@ describe("required fingerprint contract", () => {
         if (why) required.add(String(why.pr));
       }
     }
-    for (const pr of [7703, 7738, 7815, 7848, 7923, 7970]) {
+    for (const pr of [7703, 7738, 7815, 7832, 7848, 7923, 7970]) {
       expect(required.has(String(pr))).toBe(true);
     }
-    // KNOWN GAP, pinned deliberately rather than asserted away.
-    //
-    // #7832 has no required cell on any fixture. musical-tree's synthsRetained
-    // was demoted (its baseline is 1 = cleanup did not run there, so reverting
-    // the PR would leave the cell unchanged and undetectable), and Frere's
-    // synthsRetained is exact but NOT required.
-    //
-    // The consequence is that #7832 is currently guarded only by exact cells:
-    // a revert of _cleanupAfterCompletion moves Frere's synthsRetained from 0,
-    // so the report WILL show CHANGED, but nothing fails the run for it. This
-    // assertion exists so that promoting Frere's synthsRetained to required
-    // (or adding another #7832 witness) is a deliberate, visible change.
-    expect(required.has("7832")).toBe(false);
-    expect(isMetricRequired("Frere-Jacques.html", "synthsRetained")).toBe(false);
+  });
+
+  it("guards #7832 from Freere only, and not from musical-tree", () => {
+    // Freere's synthsRetained is the primary #7832 guard: healthy value 0, so
+    // a missing or all-null cell is a broken collector and must fail.
+    expect(isMetricRequired("Frere-Jacques.html", "synthsRetained")).toBe(true);
     expect(isMetricExact("Frere-Jacques.html", "synthsRetained")).toBe(true);
+    expect(
+      getFixtureContract("Frere-Jacques.html")?.requiredMetrics,
+    ).toContain("synthsRetained");
+
+    // musical-tree keeps the opposite treatment: still approved and still
+    // exact, but NOT required. Its baseline is 1, which already means cleanup
+    // did not complete on that fixture, so requiring it would imply coverage
+    // it cannot give.
+    expect(isMetricRequired("musical-tree.html", "synthsRetained")).toBe(false);
+    expect(isMetricExact("musical-tree.html", "synthsRetained")).toBe(true);
+    expect(
+      getFixtureContract("musical-tree.html")?.requiredMetrics,
+    ).not.toContain("synthsRetained");
   });
 });
 
@@ -249,6 +254,7 @@ describe("required-cell presence checking", () => {
           result("Frere-Jacques.html", {
             transportEventRatio: 0.0253,
             transportEventCount: 268,
+            synthsRetained: 0,
           }),
         ],
         ["Frere-Jacques.html"],

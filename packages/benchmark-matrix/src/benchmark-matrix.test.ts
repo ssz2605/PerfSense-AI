@@ -8,6 +8,8 @@ import {
   isMetricUnverified,
   isMetricWarnOnly,
   getExactTolerance,
+  getFingerprintExplanation,
+  FINGERPRINT_EXPLANATIONS,
   formatFixtureName,
   formatMetricValue,
   formatDeltaPercent,
@@ -235,6 +237,37 @@ describe("Benchmark Matrix contract", () => {
       false,
     );
     expect(isMetricApproved("rainbowconnection.html", "RETAINEDHEAP")).toBe(false);
+    // Every fingerprint entry names a real file and function that exist on
+    // origin/master. These were verified by line-number probe against
+    // 5bd6ae193; #7848 in particular does NOT live in logo.js (doClear is on
+    // Painter, reached from activity.js), and #7970 is a yield counter rather
+    // than a depth cap.
+    const loci = Object.values(FINGERPRINT_EXPLANATIONS).map((w) => w.locations);
+    for (const loc of loci) {
+      expect(loc).toMatch(/js\/[a-z-]+\.js/);
+      // A bare "~NNNN" range with no nearby anchor is exactly the kind of
+      // stale guess this lookup is supposed to replace.
+      expect(loc).toMatch(/\(\s*~?\d{3,5}[-)]|~\d{3,5}/);
+    }
+    // #7848 does NOT live in logo.js: doClear is Painter's method, reached from
+    // activity.js. Assert the real chain so the entry cannot drift back to a
+    // fictional logo.js doClear.
+    expect(getFingerprintExplanation("canvasInkCoverage")?.locations).toContain(
+      "js/turtle-painter.js doClear (~1345)",
+    );
+    expect(getFingerprintExplanation("canvasInkDrift")?.locations).toContain(
+      "js/activity.js doClear sites (~815, ~1776)",
+    );
+    expect(getFingerprintExplanation("maxDepth")?.locations).toContain(
+      "_EXPORT_YIELD_AFTER_SYNC_RUNS = 100",
+    );
+    expect(getFingerprintExplanation("refreshCanvasCallCount")?.locations).toContain(
+      "if (this._suppressRefresh) return;",
+    );
+    expect(getFingerprintExplanation("synthsRetained")?.locations).toContain(
+      "disposeAllInstruments",
+    );
+
     // The two restored export cells are approved on Rainbow, so they exercise
     // the true branch of the same lookup. Note the exact spelling: these
     // uppercase probes used to read "EXPORTMITITIME", which lowercases to

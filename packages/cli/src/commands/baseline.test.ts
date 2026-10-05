@@ -46,10 +46,12 @@ describe('baseline save contract', () => {
             executionTime: 60000 + i,
             maxActionDepth: 25,
             projectLoadTime: 1800 + i,
-            // Required for #7703. Save refuses to write a baseline without
-            // them, so a capture that declares this page must carry them.
+            // Required for #7703 and #7832. Save refuses to write a
+            // baseline without them, so a capture that declares this page
+            // must carry them.
             transportEventRatio: 0.0253,
             transportEventCount: 268,
+            synthsRetained: 0,
           },
         })),
       },
@@ -109,6 +111,7 @@ describe('baseline save contract', () => {
     expect(Object.keys(baseline.pages['Frere-Jacques.html']).sort()).toEqual([
       'callbackLatencyMax',
       'callbackLatencyMean',
+      'synthsRetained',
       'transportEventCount',
       'transportEventRatio',
     ]);
