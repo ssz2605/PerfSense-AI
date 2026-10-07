@@ -41,11 +41,24 @@ export interface CheckResultEntry {
   comparisonCertified?: boolean;
 }
 
+/** One field of the baseline-vs-current environment fingerprint. */
+export interface EnvironmentFieldComparison {
+  field: string;
+  baseline: string | null;
+  current: string | null;
+}
+
 export interface BaselineMeta {
   envMatched: boolean | null;
   ageDays: number | null;
   stale: boolean;
   hasEnv: boolean;
+  /**
+   * Per-field comparison behind an `envMatched === false` verdict. The
+   * fingerprints themselves were never persisted, so without this the report
+   * can say "the environment differs" but not which field differed.
+   */
+  envComparison?: EnvironmentFieldComparison[];
   /** True when both sides recorded the same harness and the baseline has an env fingerprint. */
   comparisonCertified?: boolean;
   /** Why the comparison cannot be certified; empty/absent when it can. */
@@ -419,9 +432,17 @@ function baselineBanner(
     );
   }
   if (meta.envMatched === false && meta.hasEnv) {
+    // The environment gate only certifies improvements (statistics:
+    // envTrusted is consulted in the improvement branch alone). Regression,
+    // warning and exact-fingerprint verdicts are issued unchanged, so the
+    // banner must not imply they were downgraded.
     lines.push(
-      "> ⚠ This run’s environment differs from the baseline. Improvements are demoted to " +
-        "“Likely noise” and flagged regressions may be runner noise — re-baseline on this runner to confirm.",
+      "> ⚠ This run’s environment differs from the baseline. Only **improvement** " +
+        "verdicts are withheld — they are shown as “Likely noise” instead of being " +
+        "certified. Regression, warning and optimization-fingerprint verdicts are " +
+        "unaffected. Re-capture the baseline on this runner to certify improvements.\n" +
+        ">\n" +
+        "> The per-field comparison behind this banner is in the Environment section below.",
     );
   }
   if (meta.stale && meta.ageDays !== null) {
@@ -436,6 +457,26 @@ function baselineBanner(
     );
   }
   if (lines.length > 0) lines.push("");
+  return lines;
+}
+
+/** Per-field baseline-vs-current environment table, shown only on a mismatch. */
+function envComparisonSection(meta: BaselineMeta | undefined): string[] {
+  if (!meta || meta.envMatched !== false || !meta.envComparison?.length) return [];
+  const lines: string[] = [];
+  lines.push("## Environment");
+  lines.push("");
+  lines.push(
+    "The two sides do not share an environment fingerprint, so this run cannot " +
+      "certify improvements. Field-by-field comparison:",
+  );
+  lines.push("");
+  lines.push("| Field | Baseline | Current |");
+  lines.push("|---|---|---|");
+  for (const row of meta.envComparison) {
+    lines.push(`| ${row.field} | ${row.baseline ?? "—"} | ${row.current ?? "—"} |`);
+  }
+  lines.push("");
   return lines;
 }
 
@@ -663,6 +704,9 @@ export function generatePRComment(
   lines.push("");
   lines.push("- [Full results JSON](./perfsense-results.json)");
   lines.push("");
+
+  // ── Footer: which environment field actually differed ───────────────
+  lines.push(...envComparisonSection(result.baselineMeta));
 
   return lines.join("\n");
 }

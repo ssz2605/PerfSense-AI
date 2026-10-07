@@ -44,6 +44,7 @@ import {
   computeEnvironmentFingerprint,
   baselineEnvironment,
   environmentsMatch,
+  environmentComparison,
   baselineAgeDays,
   currentHarnessRef,
   harnessComparability,
@@ -202,6 +203,11 @@ export async function run(argv: string[]): Promise<boolean> {
   const envMatched = baselineEnv
     ? environmentsMatch(baselineEnv, currentEnv)
     : null;
+  // The two fingerprints are computed in memory and never persisted, so the
+  // per-field diff has to be captured here or it is lost: without it the report
+  // can only say "the environment differs", never which field did.
+  const envComparison =
+    baselineEnv === null ? undefined : environmentComparison(baselineEnv, currentEnv);
   const ageDays = baselineAgeDays(baseline);
   const baselineStale = ageDays !== null && ageDays > maxFreshDays;
 
@@ -771,6 +777,7 @@ export async function run(argv: string[]): Promise<boolean> {
     contract,
     baselineMeta: {
       envMatched,
+      envComparison,
       ageDays,
       stale: baselineStale,
       hasEnv: baselineEnv !== null,
@@ -800,6 +807,7 @@ export async function run(argv: string[]): Promise<boolean> {
       aiNeeded,
       baseline: {
         envMatched,
+        envComparison,
         ageDays,
         stale: baselineStale,
         hasEnv: baselineEnv !== null,

@@ -5,6 +5,7 @@ import {
   parseCpuQuota,
   detectCpuThrottle,
   environmentsMatch,
+  environmentComparison,
   throttleStatesMatch,
   resolveBaselineHarness,
   currentHarnessRef,
@@ -144,6 +145,42 @@ describe('environmentsMatch', () => {
 
   it('rejects a different Node major', () => {
     expect(environmentsMatch(BASE, { ...BASE, node: 'v18.20.0' })).toBe(false);
+  });
+});
+
+describe('environmentComparison', () => {
+  it('reports every field environmentsMatch compares, on both sides', () => {
+    const rows = environmentComparison(BASE, {
+      ...BASE,
+      cpu: 'AMD EPYC 7763',
+      node: 'v20.11.9',
+    });
+    expect(rows.map((r) => r.field)).toEqual([
+      'os',
+      'arch',
+      'node major',
+      'cpu',
+      'cores',
+      'memoryGB',
+    ]);
+    const byField = Object.fromEntries(rows.map((r) => [r.field, r]));
+    expect(byField.cpu).toEqual({
+      field: 'cpu',
+      baseline: 'Intel Xeon Platinum 8375C',
+      current: 'AMD EPYC 7763',
+    });
+    // Node is compared by major, exactly like environmentsMatch.
+    expect(byField['node major']).toEqual({ field: 'node major', baseline: '20', current: '20' });
+    expect(byField.cores).toEqual({ field: 'cores', baseline: '4', current: '4' });
+    expect(byField.memoryGB).toEqual({ field: 'memoryGB', baseline: '16', current: '16' });
+  });
+
+  it('agrees with environmentsMatch on which fields decide the verdict', () => {
+    const diverging = { ...BASE, cpu: 'AMD EPYC 7763' };
+    expect(environmentsMatch(BASE, diverging)).toBe(false);
+    const rows = environmentComparison(BASE, diverging);
+    const differing = rows.filter((r) => r.baseline !== r.current).map((r) => r.field);
+    expect(differing).toEqual(['cpu']);
   });
 });
 

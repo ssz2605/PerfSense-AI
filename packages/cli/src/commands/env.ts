@@ -111,6 +111,43 @@ export function baselineEnvironment(baseline: BaselineData): EnvironmentFingerpr
 }
 
 /**
+ * Major version of a Node version string, with the leading `v` stripped:
+ * `v20.20.2` → `20`. `environmentsMatch` deliberately compares majors only.
+ */
+export function nodeMajor(version: string): string {
+  return version.replace(/^v/, '').split('.')[0];
+}
+
+/** One field of a baseline↔current environment comparison. */
+export interface EnvironmentFieldComparison {
+  field: string;
+  baseline: string | null;
+  current: string | null;
+}
+
+/**
+ * Per-field comparison for exactly the fields `environmentsMatch` compares.
+ * The fingerprints themselves are computed in memory at report time and never
+ * persisted, so this is the only way the report can show which field actually
+ * differed instead of asserting that one did.
+ */
+export function environmentComparison(
+  baseline: EnvironmentFingerprint,
+  current: EnvironmentFingerprint,
+): EnvironmentFieldComparison[] {
+  const fmt = (v: unknown): string | null =>
+    v === undefined || v === null ? null : String(v);
+  return [
+    { field: 'os', baseline: fmt(baseline.os), current: fmt(current.os) },
+    { field: 'arch', baseline: fmt(baseline.arch), current: fmt(current.arch) },
+    { field: 'node major', baseline: nodeMajor(baseline.node), current: nodeMajor(current.node) },
+    { field: 'cpu', baseline: fmt(baseline.cpu), current: fmt(current.cpu) },
+    { field: 'cores', baseline: fmt(baseline.cores), current: fmt(current.cores) },
+    { field: 'memoryGB', baseline: fmt(baseline.memoryGB), current: fmt(current.memoryGB) },
+  ];
+}
+
+/**
  * Compares two environment fingerprints. Returns null when the baseline side is
  * missing (legacy v1 baseline) — the comparison is unknowable, so callers must
  * treat improvements as unverifiable instead of trusting them.
@@ -127,7 +164,6 @@ export function environmentsMatch(
 ): boolean {
   // Compare the stable subset only: exact versions drift between baseline day
   // and PR day without meaningfully changing the runner.
-  const nodeMajor = (v: string): string => v.replace(/^v/, '').split('.')[0];
   return (
     baseline.os === current.os &&
     baseline.arch === current.arch &&

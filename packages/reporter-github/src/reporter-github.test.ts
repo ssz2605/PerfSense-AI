@@ -548,3 +548,55 @@ describe('optimization fingerprint headline', () => {
     expect(comment).toContain('🟢 No significant regression');
   });
 });
+
+describe('environment mismatch disclosure', () => {
+  const mismatched = (): CheckResult => ({
+    results: [makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 })],
+    summary: { pass: 1, warning: 0, regression: 0, failed: false },
+    baselineMeta: {
+      envMatched: false,
+      ageDays: 1,
+      stale: false,
+      hasEnv: true,
+      harness: { baselineRef: 'f41ae961', runRef: 'f41ae961', state: 'match' },
+      envComparison: [
+        { field: 'os', baseline: 'linux 6.17.0-1022-azure', current: 'linux 6.17.0-1022-azure' },
+        { field: 'arch', baseline: 'x64', current: 'x64' },
+        { field: 'node major', baseline: '20', current: '20' },
+        { field: 'cpu', baseline: 'AMD EPYC 7763 64-Core Processor', current: 'AMD EPYC 9005 48-Core Processor' },
+        { field: 'cores', baseline: '4', current: '4' },
+        { field: 'memoryGB', baseline: '16', current: '16' },
+      ],
+    },
+  });
+
+  it('states that only improvement verdicts are withheld', () => {
+    const comment = generatePRComment(mismatched(), PR_27);
+    expect(comment).toContain('Only **improvement** verdicts are withheld');
+    expect(comment).toContain(
+      'Regression, warning and optimization-fingerprint verdicts are unaffected',
+    );
+    // The old wording claimed flagged regressions might be runner noise,
+    // which the classification code never does.
+    expect(comment).not.toContain('flagged regressions may be runner noise');
+    expect(comment).not.toContain('Improvements are demoted to “Likely noise” and flagged');
+  });
+
+  it('prints the per-field fingerprint comparison in the footer', () => {
+    const comment = generatePRComment(mismatched(), PR_27);
+    expect(comment).toContain('| Field | Baseline | Current |');
+    expect(comment).toContain(
+      '| cpu | AMD EPYC 7763 64-Core Processor | AMD EPYC 9005 48-Core Processor |',
+    );
+    expect(comment).toContain('| cores | 4 | 4 |');
+    expect(comment.indexOf('## Environment')).toBeGreaterThan(comment.indexOf('## Artifacts'));
+  });
+
+  it('omits the comparison table when the environment matched', () => {
+    const result = mismatched();
+    result.baselineMeta = { ...result.baselineMeta!, envMatched: true };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).not.toContain('## Environment');
+    expect(comment).not.toContain('| Field | Baseline | Current |');
+  });
+});
