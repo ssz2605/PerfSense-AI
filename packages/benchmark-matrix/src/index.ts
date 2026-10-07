@@ -76,8 +76,11 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // the load repaints almost nothing. Best-guess timing (projectLoadTime)
     // only sees the side effect.
     // peakHeapDuringExport covers the memory half of PR #7970, which bought a
-    // ~23x export speedup with a documented ~1.3 MB -> ~27 MB peak and had no
-    // cell watching it. maxDepth is back for the same PR: the fast-run path
+    // ~23x export speedup and left its memory cost with no cell watching it.
+    // The cell reads total heap during the phase (v2 baseline median
+    // ~165,000,000 bytes), not the ~1.3 MB -> ~27 MB delta that PR quotes for
+    // itself, so the two must not be compared directly. maxDepth is back for
+    // the same PR: the fast-run path
     // raises execution depth 1 -> 100, and driver.ts filters unapproved metrics
     // at the collection boundary, so it was not being measured at all.
     //
@@ -160,17 +163,20 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // synthsRetained is Frere's #7832 guard and is required for the same
     // reason: the healthy value is 0, so a missing or null cell is a broken
     // collector, not an unchanged build. (musical-tree's copy is NOT required
-    // -- its baseline is 1, i.e. cleanup never completed on that fixture, so it
-    // could not detect a revert either way.)
+    // -- its baseline read 1 under the old fixed-delay sample, taken before the
+    // deferred cleanup could land, so it must be re-read after the next
+    // capture; until then it cannot be relied on to detect a revert either way.)
     requiredMetrics: ["transportEventRatio", "transportEventCount", "synthsRetained"],
     // The three timing cells stay warn-only: their CI variance is not yet
     // characterized, so they can warn but must not post a hard REGRESSION.
     // Note that warnOnly does NOT soften a spread breach: validate.ts emits
     // severity 'fail' for spread > maxSpreadPct without consulting
-    // isMetricWarnOnly. Two of these three already measure over their limit on
-    // unchanged code -- callbackLatencyMean 7.05% against 5%, voiceOnsetError
-    // 13.02% against 10% -- so they are expected to fail baseline validate
-    // until they leave the contract or their instability is explained.
+    // isMetricWarnOnly. Measured on the v2 baseline with validate.ts's own
+    // formula ((p90 - p10) / median, spreadPercent), all three sit far below
+    // their limit on unchanged code -- callbackLatencyMean 0.03% against 5%,
+    // callbackLatencyMax 0.47%, voiceOnsetError 4.29% against 10%. The 7.05% /
+    // 13.02% figures this comment used to claim were over their limit do not
+    // reproduce on that baseline.
     warnOnly: [
       "callbackLatencyMean",
       "callbackLatencyMax",
@@ -210,12 +216,14 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
       canvasInkCoverage: 0.0001,
       canvasInkDrift: 0.000001,
     },
-    // synthsRetained is NOT required here: baseline 1 = cleanup not completed
-    // here; Frere is the #7832 guard. Its baseline value is already the
-    // unhealthy reading, so reverting _cleanupAfterCompletion would leave this
-    // cell at 1 — unchanged, and therefore undetectable. Keeping it in
-    // requiredMetrics would imply coverage it cannot provide. It stays an exact
-    // cell so a change in either direction is still reported.
+    // synthsRetained is NOT required here, and its baseline value must be
+    // re-verified after the next capture rather than assumed: it read 1 when
+    // this comment was written, which the old fixed-delay sample took before
+    // the deferred cleanup could land. Frere is the #7832 guard. The final run
+    // now waits on the cleanup latch before sampling, so the next capture is
+    // what settles musical-tree's value — until it does, requiring this cell
+    // would imply coverage that value cannot prove, while keeping it exact
+    // still reports a move in either direction.
     requiredMetrics: ["canvasInkCoverage", "canvasInkDrift"],
     // Memory is gone from this fixture entirely, so there is nothing left to
     // cap: the two remaining timing metrics carry real thresholds.
@@ -449,8 +457,9 @@ export const FINGERPRINT_EXPLANATIONS: Record<string, FingerprintExplanation> = 
       "instrument (~1259-1265) then disposeAllInstruments (~1292)",
     meaning:
       "Above 0 means instruments survived completion, i.e. cleanup did not run. " +
-      "Frere-Jacques is the guard and its baseline is 0; musical-tree's baseline " +
-      "is already 1, so it cannot detect a revert.",
+      "Frere-Jacques is the guard and its baseline is 0. musical-tree's baseline " +
+      "must be re-read after the next capture — under the old fixed-delay sample " +
+      "it read 1, because the sample was taken before the deferred cleanup landed.",
   },
   canvasInkCoverage: {
     pr: 7848,
