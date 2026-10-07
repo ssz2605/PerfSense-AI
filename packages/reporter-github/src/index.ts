@@ -508,6 +508,11 @@ export function generatePRComment(
   const warnings = verified.filter((e) => e.status === "WARNING");
   const improvements = verified.filter((e) => e.status === "IMPROVEMENT");
   const likelyNoise = verified.filter((e) => e.status === "LIKELY_NOISE");
+  // A CHANGED optimization-fingerprint cell is an equality break: it can set
+  // the report exit code on its own, and it is a finding in its own right even
+  // though no statistical threshold was crossed. It must never be headlined as
+  // "no significant regression".
+  const changed = verified.filter((e) => e.status === "CHANGED");
 
   const hasAI =
     !!options.aiAnalysis ||
@@ -545,6 +550,14 @@ export function generatePRComment(
     lines.push(
       `${regressions.length} regression(s), ${warnings.length} warning(s), ` +
         `${improvements.length} improvement(s), ${likelyNoise.length} likely-noise change(s) across approved metrics.`,
+    );
+  } else if (changed.length > 0) {
+    lines.push(`${changed.length} optimization fingerprint(s) CHANGED`);
+    lines.push("");
+    lines.push(
+      `${changed.length} fingerprint cell(s) no longer match the baseline, ` +
+        `${warnings.length} warning(s), ${improvements.length} improvement(s), ` +
+        `${likelyNoise.length} likely-noise change(s) — see the fixture rows below.`,
     );
   } else if (warnings.length > 0) {
     lines.push("🟠 No hard regression (warnings present)");

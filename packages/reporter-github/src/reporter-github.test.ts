@@ -491,3 +491,60 @@ describe('AI reasoning / root cause', () => {
     expect(comment).toContain('shared across those metrics');
   });
 });
+
+describe('optimization fingerprint headline', () => {
+  it('never headlines a CHANGED cell as "no significant regression"', () => {
+    // The exact-cell path sets report_exit on its own, so a CHANGED-only run
+    // is not clean even though no statistical threshold was crossed.
+    const result: CheckResult = {
+      results: [
+        makeEntry({
+          page: 'crabcanon-plot.html',
+          metric: 'viewportCulledBlocks',
+          status: 'CHANGED',
+          deltaPercent: null,
+          baselineMedian: 796,
+          currentMedian: 0,
+          note: 'fingerprint value deviated from baseline',
+        }),
+        makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 }),
+      ],
+      summary: { pass: 1, warning: 0, regression: 0, changed: 1, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+
+    expect(comment).toContain('1 optimization fingerprint(s) CHANGED');
+    expect(comment).not.toContain('🟢 No significant regression');
+    // The changed cell is still named in its fixture row.
+    expect(comment).toContain('| crabcanon-plot | 🔶 Changed |');
+  });
+
+  it('still headlines a statistical regression first', () => {
+    const result: CheckResult = {
+      results: [
+        makeEntry({ metric: 'saveTime', status: 'REGRESSION', deltaPercent: 159.4 }),
+        makeEntry({
+          page: 'crabcanon-plot.html',
+          metric: 'viewportCulledBlocks',
+          status: 'CHANGED',
+          deltaPercent: null,
+          baselineMedian: 796,
+          currentMedian: 0,
+        }),
+      ],
+      summary: { pass: 0, warning: 0, regression: 1, changed: 1, failed: true },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('🔴 Performance regression detected');
+    expect(comment).not.toContain('🟢 No significant regression');
+  });
+
+  it('keeps the green line for a run with no CHANGED cell', () => {
+    const result: CheckResult = {
+      results: [makeEntry({ page: 'index.html', metric: 'bootstrapTotal', status: 'PASS', deltaPercent: 0 })],
+      summary: { pass: 1, warning: 0, regression: 0, failed: false },
+    };
+    const comment = generatePRComment(result, PR_27);
+    expect(comment).toContain('🟢 No significant regression');
+  });
+});
