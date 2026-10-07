@@ -231,4 +231,34 @@ describe('baseline save contract', () => {
     // And it must not leave a half-written baseline behind.
     expect(fs.existsSync(outFile)).toBe(false);
   });
+
+  it('writes no duplicate top-level key and only the canonical commit key', () => {
+    writeResults([
+      {
+        page: 'index.html',
+        runs: Array.from({ length: 5 }, (_, i) => ({
+          run: i + 1,
+          metrics: {
+            bootstrapTotal: FIVE_RUNS[i],
+            initTotal: 300 + i,
+            heapAfterBoot: 47e6,
+          },
+        })),
+      },
+    ]);
+
+    save(['--from', fromFile, '--out', outFile, '--commit', 'abc1234']);
+
+    // JSON.parse silently keeps the last of two identical keys, so a duplicate
+    // survives every object-level assertion: check the raw text instead.
+    const raw = fs.readFileSync(outFile, 'utf-8');
+    const topLevelKeys = [...raw.matchAll(/^ {2}"([^"]+)":/gm)].map((m) => m[1]);
+    expect(topLevelKeys.filter((k, i) => topLevelKeys.indexOf(k) !== i)).toEqual([]);
+    // commitSHA is the canonical key every reader uses. `commitSha` is the
+    // capture workflow's stamp-step alias and must never be written here.
+    expect(topLevelKeys).toContain('commitSHA');
+    expect(raw).not.toContain('"commitSha"');
+    expect(topLevelKeys).toContain('env');
+    expect(topLevelKeys).toContain('harness');
+  });
 });

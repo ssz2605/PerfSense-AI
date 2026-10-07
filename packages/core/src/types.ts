@@ -138,6 +138,13 @@ export interface BaselineData {
   createdAt: string;
   generatedAt?: string;
   commitSHA?: string;
+  /**
+   * Alias written by the baseline stamp step in the capture workflow (it
+   * rewrites the file after `baseline save` to attach runner metadata).
+   * `commitSHA` is the canonical key and the one `baseline save` writes;
+   * readers accept this alias so a stamped file still compares commits.
+   */
+  commitSha?: string;
   perfsenseSHA?: string;
   configHash?: string;
   /** PerfSense revision that produced this baseline. Absent on legacy baselines. */

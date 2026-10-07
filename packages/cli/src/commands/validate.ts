@@ -395,7 +395,12 @@ function divergenceDefects(
   maxPct: number,
 ): BaselineDefect[] {
   const defects: BaselineDefect[] = [];
-  const sameCommit = !!baseline.commitSHA && baseline.commitSHA === previous.commitSHA;
+  // `commitSHA` is canonical; `commitSha` is the stamp step's alias. Accept
+  // both so a stamped baseline still matches instead of silently skipping the
+  // divergence check for having no readable commit.
+  const baselineCommit = baseline.commitSHA ?? baseline.commitSha;
+  const previousCommit = previous.commitSHA ?? previous.commitSha;
+  const sameCommit = !!baselineCommit && baselineCommit === previousCommit;
   const sameEnv =
     !!baseline.env && !!previous.env && environmentsMatch(previous.env, baseline.env);
   if (!sameCommit || !sameEnv) return defects;
