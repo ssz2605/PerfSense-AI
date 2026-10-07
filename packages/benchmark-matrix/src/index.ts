@@ -88,10 +88,12 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // exact cells that stay are the ones whose value CHANGES when the optimized
     // path is reverted.
     //
-    // exportMIDITime and saveAsLilypondTime are restored as warn-only timing
-    // cells for PR #7970's fast-run export path. They are defence-in-depth:
-    // maxDepth (exact, required) is the deterministic witness for that PR, and
-    // these two say whether the ~23x is still visible in milliseconds.
+    // exportMIDITime and saveAsLilypondTime are restored as timing cells for
+    // PR #7970's fast-run export path. They are defence-in-depth: maxDepth
+    // (exact, required) is the deterministic witness for that PR, and these two
+    // say whether the ~23x is still visible in milliseconds. exportMIDITime now
+    // gates like any other timing cell; only saveAsLilypondTime is capped
+    // warn-only, because its own spread sits at its threshold.
     // #7970 effect ~23x; run #22 spreads 13.28%/11.49%; 20% cannot hide it
     metrics: [
       "projectLoadTime",
@@ -107,11 +109,12 @@ export const BENCHMARK_MATRIX: FixtureContract[] = [
     // deterministic values for both, and reverting either PR moves its cell.
     exactMetrics: ["refreshCanvasCallCount", "maxDepth"],
     requiredMetrics: ["refreshCanvasCallCount", "maxDepth"],
-    // The two restored export cells are warn-only: their CI spread is a timing
-    // distribution, so a delta is reported but never fails the run on its own.
-    // Every other cell here is either an exact fingerprint or a timing metric
-    // with a real threshold.
-    warnOnly: ["exportMIDITime", "saveAsLilypondTime"],
+    // saveAsLilypondTime alone stays warn-only: its measured spread sits at its
+    // own threshold, so a delta there is reported but does not fail the run by
+    // itself. exportMIDITime dropped the cap so an export slowdown can fail the
+    // run. Every other cell here is either an exact fingerprint or a timing
+    // metric with a real threshold. Thresholds and maxSpreadPct are untouched.
+    warnOnly: ["saveAsLilypondTime"],
   },
   {
     fixture: "Frere-Jacques.html",

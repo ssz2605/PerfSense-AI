@@ -110,16 +110,24 @@ describe("required fingerprint contract", () => {
 });
 
 describe("restored Rainbow export cells", () => {
-  it("approves both export metrics on Rainbow as warn-only, not required", () => {
-    for (const metric of ["exportMIDITime", "saveAsLilypondTime"]) {
-      expect(isMetricApproved("RainbowConnection.html", metric)).toBe(true);
-      expect(isMetricWarnOnly("RainbowConnection.html", metric)).toBe(true);
-      // Not required: maxDepth is #7970's deterministic witness; these two are
-      // defence-in-depth timing cells.
-      expect(isMetricRequired("RainbowConnection.html", metric)).toBe(false);
-      // Timing cells, so never exact.
-      expect(isMetricExact("RainbowConnection.html", metric)).toBe(false);
-    }
+  it("gates exportMIDITime like any other timing cell", () => {
+    expect(isMetricApproved("RainbowConnection.html", "exportMIDITime")).toBe(true);
+    // No longer warn-only: an export slowdown can now fail the run on its own.
+    expect(isMetricWarnOnly("RainbowConnection.html", "exportMIDITime")).toBe(false);
+    // Not required: maxDepth is #7970's deterministic witness; this is a
+    // defence-in-depth timing cell.
+    expect(isMetricRequired("RainbowConnection.html", "exportMIDITime")).toBe(false);
+    // Timing cell, so never exact.
+    expect(isMetricExact("RainbowConnection.html", "exportMIDITime")).toBe(false);
+  });
+
+  it("keeps saveAsLilypondTime warn-only, not required", () => {
+    expect(isMetricApproved("RainbowConnection.html", "saveAsLilypondTime")).toBe(true);
+    // Its measured spread sits at its own threshold, so it warns but must not
+    // fail the run by itself. Thresholds and maxSpreadPct are untouched.
+    expect(isMetricWarnOnly("RainbowConnection.html", "saveAsLilypondTime")).toBe(true);
+    expect(isMetricRequired("RainbowConnection.html", "saveAsLilypondTime")).toBe(false);
+    expect(isMetricExact("RainbowConnection.html", "saveAsLilypondTime")).toBe(false);
   });
 
   it("keeps Rainbow's exact fingerprints required and exact", () => {

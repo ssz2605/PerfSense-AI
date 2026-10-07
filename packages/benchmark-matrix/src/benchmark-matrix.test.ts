@@ -47,8 +47,10 @@ describe("Benchmark Matrix contract", () => {
     ]);
     // Rainbow keeps the cells that move when a merged perf PR is reverted
     // (refreshCanvasCallCount for #7923, maxDepth for #7970) plus the load
-    // timings. exportMIDITime and saveAsLilypondTime are restored as warn-only
-    // defence-in-depth for #7970; the stage/cache counters stay gone.
+    // timings. exportMIDITime and saveAsLilypondTime are restored as
+    // defence-in-depth for #7970 — exportMIDITime now gates like any other
+    // timing cell, only saveAsLilypondTime stays warn-only; the stage/cache
+    // counters stay gone.
     expect(getApprovedMetrics("RainbowConnection.html")).toEqual([
       "projectLoadTime",
       "saveTime",
@@ -109,7 +111,8 @@ describe("Benchmark Matrix contract", () => {
       "crabcanon-plot.html": 5,
     });
     // 27 cells total: 39 before the 2026-10 cleanup, 25 after it, plus the two
-    // Rainbow export timings restored as warn-only for #7970.
+    // Rainbow export timings restored for #7970 (only saveAsLilypondTime is
+    // still warn-only).
     const total = BENCHMARK_MATRIX.reduce(
       (sum, c) => sum + c.metrics.length,
       0,
@@ -126,8 +129,8 @@ describe("Benchmark Matrix contract", () => {
     // crabcanon-plot, which is the fixture those two PRs were measured on: they
     // are its fingerprints, and Rainbow only ever borrowed them.
     // exportMIDITime and saveAsLilypondTime are deliberately NOT listed below: they
-    // were restored to Rainbow as warn-only cells for #7970. Every other name in
-    // this table is still retired everywhere.
+    // were restored to Rainbow for #7970 (only saveAsLilypondTime is still
+    // warn-only). Every other name in this table is still retired everywhere.
     const retired: Record<string, string[]> = {
       stageUpdateCallCount: [],
       stageUpdateTime: [],
@@ -343,6 +346,15 @@ describe("Benchmark Matrix contract", () => {
       false,
     );
     expect(isMetricWarnOnly("Frere-Jacques.html", "maxQueueDepth")).toBe(false);
+    // Rainbow: exportMIDITime dropped the warn-only cap so an export slowdown
+    // can fail a run on its own; saveAsLilypondTime keeps the cap because its
+    // measured spread sits at its own threshold. Thresholds are untouched.
+    expect(isMetricWarnOnly("RainbowConnection.html", "exportMIDITime")).toBe(
+      false,
+    );
+    expect(isMetricWarnOnly("RainbowConnection.html", "saveAsLilypondTime")).toBe(
+      true,
+    );
     // The exact recursion metric is verified for its fixtures.
     expect(isMetricWarnOnly("musical-tree.html", "maxLogicalDepth")).toBe(
       false,
