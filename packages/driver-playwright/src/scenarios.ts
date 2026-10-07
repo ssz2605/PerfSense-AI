@@ -776,7 +776,7 @@ const interactSnippet = `
  * Two runs cannot show any of this, which is why the old playToCompletion
  * double-run produced a memoryDelta/retainedHeap of exactly 0.
  */
-const repeatedRunSnippet = `
+export const repeatedRunSnippet = `
 (async function (__opt) {
   const ps = (window).__perfsense = (window).__perfsense || {};
   const mb = (window).__mb;
@@ -872,9 +872,34 @@ const repeatedRunSnippet = `
     if (!isRunning()) await startRun();
     const ok = await waitQuiet(perRunMs);
     if (!ok) break;
-    // The natural-completion cleanup is deferred behind a timer; give it room
-    // before sampling the post-run state.
-    await new Promise((r) => setTimeout(r, 600));
+    const isFinalRun = i === runs - 1;
+    if (isFinalRun) {
+      // FINAL RUN ONLY: the natural-completion cleanup is deferred behind
+      // js/logo.js:2454-2465, roughly a full second after the last note, so the
+      // fixed 600 ms sleep below would sample before it lands and read the
+      // pre-cleanup ink and synth state. Poll the same bounded latch
+      // playToCompletion uses (60 x 100 ms on _synthsInitialized === false)
+      // instead, then take the sample. Runs 1..N-1 keep the fixed sleep
+      // unchanged, so consecutive runs still overlap and whatever accumulates
+      // across them is still observed.
+      let cleanupSeen = false;
+      for (let k = 0; k < 60; k++) {
+        if (logo && logo._synthsInitialized === false) {
+          cleanupSeen = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Do not throw on timeout: a page whose cleanup never fires still has to
+      // report what it measured, and the absent cleanup is itself the finding.
+      if (!cleanupSeen) {
+        console.log('[perfsense] final-run cleanup was not observed within 6000ms; sampling anyway');
+      }
+    } else {
+      // The natural-completion cleanup is deferred behind a timer; give it room
+      // before sampling the post-run state.
+      await new Promise((r) => setTimeout(r, 600));
+    }
     completed++;
     inks.push(inkOf());
     heaps.push(heap());

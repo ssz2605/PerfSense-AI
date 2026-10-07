@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { openProjectSnippet } from './scenarios';
+import { openProjectSnippet, repeatedRunSnippet } from './scenarios';
 
 /**
  * The open-project phase has no completion signal from the app: `projectLoaded`
@@ -96,5 +96,121 @@ describe('openProjectSnippet readiness', () => {
     await h.done;
 
     expect(h.win.__perfsense.projectLoadTime).toBeGreaterThanOrEqual(100000);
+  });
+});
+
+/**
+ * The repeated-run scenario samples the LAST run after the deferred
+ * `_cleanupAfterCompletion` (js/logo.js:2449-2465, ~1100 ms after the last
+ * note). Before this, every run — including the last — slept a fixed 600 ms and
+ * so read the pre-cleanup state: the #7832/#7848 blind spot on musical-tree.
+ *
+ * These tests drive the snippet against a scripted runner and pin both halves:
+ * runs 1..N-1 keep the fixed sleep (they must keep overlapping so accumulation
+ * across consecutive runs is still observed), and the final run waits on the
+ * same bounded latch `playToCompletion` uses, without throwing when it times
+ * out.
+ */
+describe('repeatedRunSnippet final-run cleanup wait', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ['Date', 'setTimeout', 'clearTimeout', 'performance'],
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Compile the snippet against a runner that finishes each run quickly. */
+  function startRepeatedRun(runs: number, cleanupAtMs: number | null) {
+    const state = { running: true };
+    const logo = { _synthsInitialized: true, sounds: [], doStopTurtles() {} };
+    const win: Record<string, any> = {
+      __mb: {
+        logo,
+        runner: {
+          isRunning: () => state.running,
+          start: () => {
+            state.running = true;
+            setTimeout(() => {
+              state.running = false;
+            }, 50);
+          },
+        },
+        turtles: { turtleList: [] },
+      },
+    };
+    const doc = { getElementById: () => null, querySelectorAll: () => [] };
+    const fn = new Function(
+      'window',
+      'document',
+      `return (${repeatedRunSnippet});`,
+    )(win, doc);
+
+    // The first run starts already running, then goes quiet 50 ms in.
+    setTimeout(() => {
+      state.running = false;
+    }, 50);
+    // The deferred cleanup, or never when it is absent (gutted cleanup).
+    if (cleanupAtMs !== null) {
+      setTimeout(() => {
+        logo._synthsInitialized = false;
+      }, cleanupAtMs);
+    }
+
+    let settled = false;
+    const done = fn({ repeatRuns: runs, timeoutMs: 120000 }).then((value: unknown) => {
+      settled = true;
+      return value;
+    });
+    return { win, done, logo, settled: () => settled };
+  }
+
+  it('holds the final sample back until the deferred cleanup lands', async () => {
+    const h = startRepeatedRun(2, 1500);
+
+    await vi.advanceTimersByTimeAsync(1400);
+    // Both runs are already quiet by then, but the last sample must not have
+    // been taken: the cleanup that sets _synthsInitialized = false has not run.
+    expect(h.settled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.settled()).toBe(true);
+
+    const out = (await h.done) as Record<string, number>;
+    expect(out.repeatRuns).toBe(2);
+    // Read after cleanup, so the synth/transport latch is released.
+    expect(out.synthsRetained).toBe(0);
+  });
+
+  it('still reports values when cleanup never fires, and says so', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const h = startRepeatedRun(2, null);
+
+    // The bounded latch gives up 6 s after the final run goes quiet rather
+    // than throwing: a broken page must still hand back what it measured.
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.settled()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(h.settled()).toBe(true);
+
+    const out = (await h.done) as Record<string, number>;
+    expect(out.repeatRuns).toBe(2);
+    expect(out.synthsRetained).toBe(1);
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('final-run cleanup was not observed'),
+    );
+  });
+
+  it('keeps the fixed sleep for runs 1..N-1 only', () => {
+    // The 600 ms sleep must survive for the overlapping runs; the final run
+    // waits on the cleanup latch instead.
+    expect(repeatedRunSnippet.match(/setTimeout\(r, 600\)/g)).toHaveLength(1);
+    expect(repeatedRunSnippet).toContain('i === runs - 1');
+    expect(repeatedRunSnippet).toContain('k < 60');
+    expect(repeatedRunSnippet).toContain('_synthsInitialized === false');
   });
 });
