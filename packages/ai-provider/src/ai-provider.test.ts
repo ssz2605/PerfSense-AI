@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { buildSystemPrompt, parseAIResponse, generateAIAnalysis, buildEvidenceBriefing, buildOllamaUserMessage } from './index';
@@ -135,5 +135,57 @@ describe('generateAIAnalysis', () => {
     const result = await generateAIAnalysis(mockCorrelation, { commit: 'abc', message: 'test', author: 'dev', filesChanged: [] }, { provider: 'openai', model: 'gpt-4o-mini' });
     expect(result).toBeNull();
     if (oldKey) process.env.OPENAI_API_KEY = oldKey;
+  });
+});
+
+describe('AI request failure reporting', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const ctx = { commit: 'abc', message: 'test', author: 'dev', filesChanged: ['a.ts'] };
+
+  it('surfaces the HTTP status when the provider answers with an error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+    }));
+    await expect(
+      generateAIAnalysis(mockCorrelation, ctx, { provider: 'ollama', model: 'llama3.1:8b' }),
+    ).rejects.toThrow('Ollama API error: HTTP 500 Internal Server Error');
+  });
+
+  it('reports a timeout as a timeout, not as a generic failure', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(
+      Object.assign(new Error('socket hang up'), { name: 'TimeoutError' }),
+    ));
+    await expect(
+      generateAIAnalysis(mockCorrelation, ctx, { provider: 'ollama', model: 'llama3.1:8b' }),
+    ).rejects.toThrow('AI request timed out after 60s');
+  });
+
+  it('passes an abort signal to every provider call', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({
+        choices: [{ message: { content: 'explanation' } }],
+        content: [{ text: 'explanation' }],
+        message: { content: 'explanation' },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const configs: Array<Parameters<typeof generateAIAnalysis>[2]> = [
+      { provider: 'openai', apiKey: 'sk-test', model: 'gpt-4o-mini' },
+      { provider: 'anthropic', apiKey: 'sk-test', model: 'claude-3-haiku-20240307' },
+      { provider: 'ollama', model: 'llama3.1:8b' },
+    ];
+    for (const config of configs) {
+      await generateAIAnalysis(mockCorrelation, ctx, config);
+      const call = fetchMock.mock.calls[fetchMock.mock.calls.length - 1];
+      expect((call[1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+    }
   });
 });

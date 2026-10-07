@@ -36,6 +36,26 @@ const DEFAULT_MODELS: Record<AIProvider, string> = {
   ollama: 'llama3.1:8b',
 };
 
+/** Hard ceiling on a single AI request, so a hung provider cannot stall the report. */
+export const AI_TIMEOUT_MS = 60_000;
+
+/**
+ * `fetch` with a hard timeout and a message that names the cause. Without this
+ * a hung provider fails at the job-level timeout with a generic abort that the
+ * report can only describe as "something went wrong".
+ */
+export async function fetchWithTimeout(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(AI_TIMEOUT_MS) });
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name;
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error(`AI request timed out after ${AI_TIMEOUT_MS / 1000}s (${url})`);
+    }
+    throw err;
+  }
+}
+
 function loadPromptTemplate(name: string): string {
   const promptDir = path.join(__dirname, 'prompts');
   const filePath = path.join(promptDir, name);
@@ -140,7 +160,7 @@ async function callOpenAI(
     throw new Error('OpenAI API key not provided');
   }
   const baseUrl = config.baseUrl || 'https://api.openai.com/v1';
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+  const response = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -154,7 +174,7 @@ async function callOpenAI(
     }),
   });
   if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+    throw new Error(`OpenAI API error: HTTP ${response.status} ${response.statusText}`);
   }
   const data = await response.json() as any;
   const content = data.choices?.[0]?.message?.content || '';
@@ -171,7 +191,7 @@ async function callAnthropic(
     throw new Error('Anthropic API key not provided');
   }
   const baseUrl = config.baseUrl || 'https://api.anthropic.com/v1';
-  const response = await fetch(`${baseUrl}/messages`, {
+  const response = await fetchWithTimeout(`${baseUrl}/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -186,7 +206,7 @@ async function callAnthropic(
     }),
   });
   if (!response.ok) {
-    throw new Error(`Anthropic API error: ${response.status} ${response.statusText}`);
+    throw new Error(`Anthropic API error: HTTP ${response.status} ${response.statusText}`);
   }
   const data = await response.json() as any;
   const content = data.content?.[0]?.text || '';
@@ -243,7 +263,7 @@ async function callOllama(
   input: AIInput,
 ): Promise<AIOutput> {
   const baseUrl = config.baseUrl || 'http://localhost:11434';
-  const response = await fetch(`${baseUrl}/api/chat`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -256,7 +276,7 @@ async function callOllama(
     }),
   });
   if (!response.ok) {
-    throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+    throw new Error(`Ollama API error: HTTP ${response.status} ${response.statusText}`);
   }
   const data = await response.json() as any;
   const content = data.message?.content || '';

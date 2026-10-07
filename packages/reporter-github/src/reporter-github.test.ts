@@ -600,3 +600,30 @@ describe('environment mismatch disclosure', () => {
     expect(comment).not.toContain('| Field | Baseline | Current |');
   });
 });
+
+describe('AI unavailability reporting', () => {
+  const unexplainedRegression = (): CheckResult => ({
+    results: [makeEntry({ metric: 'saveTime', status: 'REGRESSION', deltaPercent: 159.4 })],
+    summary: { pass: 0, warning: 0, regression: 1, failed: true },
+    // The AI banner is rendered by baselineBanner, so a report always carries
+    // baseline metadata; without it nothing would print at all.
+    baselineMeta: { envMatched: true, ageDays: 1, stale: false, hasEnv: true },
+  });
+
+  it('reports the reason the report command recorded', () => {
+    const comment = generatePRComment(unexplainedRegression(), {
+      ...PR_27,
+      aiUnavailableReason: 'AI request timed out after 60s (https://api.openai.com/v1/chat/completions)',
+    });
+    expect(comment).toContain(
+      'AI analysis unavailable — AI request timed out after 60s (https://api.openai.com/v1/chat/completions)',
+    );
+    expect(comment).not.toContain('no provider/key configured');
+  });
+
+  it('claims no configuration cause when the producer recorded none', () => {
+    const comment = generatePRComment(unexplainedRegression(), PR_27);
+    expect(comment).toContain('AI analysis unavailable — no explanation was produced for this run');
+    expect(comment).not.toContain('no provider/key configured');
+  });
+});

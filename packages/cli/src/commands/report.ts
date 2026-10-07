@@ -51,6 +51,22 @@ import {
 } from "./env";
 import { findRequiredFailures } from "./requiredMetrics";
 
+/**
+ * Turns a caught AI failure into the sentence the report banner prints. The
+ * point is fidelity: an HTTP status, a timeout message or a missing module
+ * must reach the reader as itself, never flattened into a claim that the
+ * provider or key was absent.
+ */
+export function describeAIError(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (err && typeof err === "object") {
+    const anyErr = err as { message?: unknown; name?: unknown };
+    if (typeof anyErr.message === "string" && anyErr.message) return anyErr.message;
+    if (typeof anyErr.name === "string" && anyErr.name) return anyErr.name;
+  }
+  return String(err);
+}
+
 const DEFAULT_THRESHOLDS: Record<string, ThresholdLevel> = {
   TTFB: { warning: 10, fail: 30 },
   FCP: { warning: 5, fail: 10 },
@@ -627,6 +643,14 @@ export async function run(argv: string[]): Promise<boolean> {
   const aiNeeded = hasRegression || hasWarning;
   let aiAnalysis: string | undefined;
   let aiPerMetric: Record<string, string> | undefined;
+  // Why no AI text was produced, recorded at the point of failure so the
+  // banner states the real cause (timeout, HTTP status, missing key) instead
+  // of asserting a configuration problem that may not be the reason.
+  let aiUnavailableReason: string | undefined;
+
+  if (aiNeeded && !aiProvider) {
+    aiUnavailableReason = "no AI provider configured for this run";
+  }
 
   if (aiNeeded && aiProvider) {
     try {
@@ -691,6 +715,9 @@ export async function run(argv: string[]): Promise<boolean> {
               explainedMetrics.add(m.toLowerCase());
           }
         }
+        // First per-metric failure, kept so a total failure can be reported
+        // with the real cause instead of a guessed one.
+        let firstPerMetricError: string | undefined;
         for (const entry of allResults) {
           const isUnexplainedRegression =
             entry.status === "REGRESSION" &&
@@ -745,14 +772,23 @@ export async function run(argv: string[]): Promise<boolean> {
               aiConfig,
             );
             if (focused) perMetric[entry.metric] = focused.explanation;
-          } catch {
-            /* per-metric AI failed silently; the block falls back to "No likely cause." */
+          } catch (err) {
+            // A failed per-metric call falls back to "No likely cause.", but
+            // the reason is recorded: if every call failed the banner must
+            // report it rather than blame a missing provider or key.
+            firstPerMetricError ??= describeAIError(err);
           }
         }
         if (Object.keys(perMetric).length > 0) aiPerMetric = perMetric;
+        else if (firstPerMetricError !== undefined)
+          aiUnavailableReason ??= `AI analysis failed: ${firstPerMetricError}`;
+      } else {
+        // Only here is "no key" provably the cause: the provider is known and
+        // neither an explicit key nor an environment key is present.
+        aiUnavailableReason = `no API key configured for provider "${aiProvider}"`;
       }
-    } catch {
-      // AI analysis failed silently
+    } catch (err) {
+      aiUnavailableReason = `AI analysis failed: ${describeAIError(err)}`;
     }
   }
 
@@ -796,6 +832,7 @@ export async function run(argv: string[]): Promise<boolean> {
     ...reportOptions,
     aiAnalysis,
     aiPerMetric,
+    ...(aiUnavailableReason ? { aiUnavailableReason } : {}),
   });
 
   if (formatJson) {

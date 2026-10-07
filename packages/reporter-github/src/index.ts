@@ -105,6 +105,12 @@ export interface PRReportOptions {
   /** Per-metric AI explanations, keyed by metric name, shown in each metric's
    *  detail block when the deterministic engine has no likely cause. */
   aiPerMetric?: Record<string, string>;
+  /**
+   * Why no AI text was produced, recorded by the command that made the
+   * request. Rendered verbatim in the banner so a timeout or an HTTP status is
+   * not reported as a missing provider or key.
+   */
+  aiUnavailableReason?: string;
 }
 
 /** Professional status words used in the full metrics table (no emojis). */
@@ -401,7 +407,7 @@ function uncertifiedSuffix(entry: CheckResultEntry): string {
 /** Baseline freshness/environment banner rendered right under the header. */
 function baselineBanner(
   meta: BaselineMeta | undefined,
-  aiUnavailable: boolean,
+  aiUnavailableReason: string | null,
 ): string[] {
   const lines: string[] = [];
   if (!meta) return lines;
@@ -451,9 +457,13 @@ function baselineBanner(
         "demoted to “Likely noise”; refresh the baseline to re-enable improvement verdicts.",
     );
   }
-  if (aiUnavailable) {
+  if (aiUnavailableReason !== null) {
+    // Report the real cause the report command recorded. Guessing a
+    // configuration problem here is how a timeout ends up reported as
+    // "no provider/key configured".
     lines.push(
-      "> ⚠ AI unavailable — no provider/key configured. Deterministic causes still shown.",
+      `> ⚠ AI analysis unavailable — ${aiUnavailableReason}. ` +
+        "Deterministic causes still shown.",
     );
   }
   if (lines.length > 0) lines.push("");
@@ -565,13 +575,19 @@ export function generatePRComment(
       result.correlation.crossMetricCauses.length > 0);
   // "AI unavailable" only when there is something to explain and neither the
   // per-metric AI, the top-level AI section, nor a deterministic cause with a
-  // rationale was produced — never a silent drop.
+  // rationale was produced — never a silent drop. The reason text comes from
+  // the report command, which saw the actual failure; without it say only what
+  // is known to be true (nothing was produced), not which configuration was
+  // responsible.
   const aiUnavailable =
     (regressions.length > 0 || warnings.length > 0) &&
     !hasAI &&
     !correlationHasExplanation;
+  const aiUnavailableReason = aiUnavailable
+    ? options.aiUnavailableReason ?? "no explanation was produced for this run"
+    : null;
 
-  lines.push(...baselineBanner(result.baselineMeta, aiUnavailable));
+  lines.push(...baselineBanner(result.baselineMeta, aiUnavailableReason));
 
   // ── Performance Check (overall status + fixture summary) ─────────────
   lines.push("## Performance Check");
